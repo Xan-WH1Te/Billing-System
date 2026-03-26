@@ -10,6 +10,41 @@
 
 static CardNode* g_cards = NULL;
 
+static bool append_card_node(CardNode** head, const Card* card)
+{
+    CardNode* node;
+
+    if (head == NULL || card == NULL)
+    {
+        return false;
+    }
+
+    node = (CardNode*)malloc(sizeof(CardNode));
+    if (node == NULL)
+    {
+        return false;
+    }
+
+    node->card = *card;
+    node->next = NULL;
+
+    if (*head == NULL)
+    {
+        *head = node;
+    }
+    else
+    {
+        CardNode* tail = *head;
+        while (tail->next != NULL)
+        {
+            tail = tail->next;
+        }
+        tail->next = node;
+    }
+
+    return true;
+}
+
 static void trim_newline(char* text)
 {
     size_t len;
@@ -313,6 +348,12 @@ static void persist_all_cards_to_file(void)
     }
 }
 
+static void print_todo_message(const char* feature_name)
+{
+    printf("[%s] 功能待实现\n", feature_name);
+    wait_enter();
+}
+
 void card_service_load_cards_from_file(void)
 {
     card_service_free_all();
@@ -377,14 +418,10 @@ void card_service_add_card(void)
         break;
     }
 
-    while (1)
+    if (!read_amount_cent("[添加卡] 请输入初始余额（元)：", &init_balance_cent))
     {
-        if (!read_amount_cent("[添加卡] 请输入初始余额（元)：", &init_balance_cent))
-        {
-            print_cancelled_and_back_to_menu();
-            return;
-        }
-        break;
+        print_cancelled_and_back_to_menu();
+        return;
     }
 
     while (1)
@@ -414,30 +451,14 @@ void card_service_add_card(void)
 
     init_card(&card, id, owner, pin, init_balance_cent);
 
-    node = (CardNode*)malloc(sizeof(CardNode));
-    if (node == NULL)
+    if (!append_card_node(&g_cards, &card))
     {
         printf("添加失败：内存不足。\n");
         wait_enter();
         return;
     }
 
-    node->card = card;
-    node->next = NULL;
-
-    if (g_cards == NULL)
-    {
-        g_cards = node;
-    }
-    else
-    {
-        CardNode* tail = g_cards;
-        while (tail->next != NULL)
-        {
-            tail = tail->next;
-        }
-        tail->next = node;
-    }
+    node = find_card_node_by_id(id);
 
     persist_all_cards_to_file();
 
@@ -525,32 +546,27 @@ void card_service_start_session(void)
 
 void card_service_end_session(void)
 {
-    printf("[下机] 功能待实现\n");
-    wait_enter();
+    print_todo_message("下机");
 }
 
 void card_service_recharge(void)
 {
-    printf("[充值] 功能待实现\n");
-    wait_enter();
+    print_todo_message("充值");
 }
 
 void card_service_refund(void)
 {
-    printf("[退费] 功能待实现\n");
-    wait_enter();
+    print_todo_message("退费");
 }
 
 void card_service_query_stats(void)
 {
-    printf("[查询统计] 功能待实现\n");
-    wait_enter();
+    print_todo_message("查询统计");
 }
 
 void card_service_delete_card(void)
 {
-    printf("[注销卡] 功能待实现\n");
-    wait_enter();
+    print_todo_message("注销卡");
 }
 
 void card_service_free_all(void)

@@ -15,21 +15,6 @@ typedef enum CardStatus
     OutofDate
 } CardStatus;
 
-typedef enum TxType
-{
-    Recharge,
-    Refund,
-    StartSession, 
-    EndSession
-} TxType;
-
-typedef struct TxRecord
-{
-    int cardID;
-    Fen amount;
-    TxType type;
-} TxRecord;
-
 typedef struct Card
 {
     int id;

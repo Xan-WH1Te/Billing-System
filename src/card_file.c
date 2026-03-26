@@ -42,6 +42,38 @@ static bool text_to_status(const char* text, CardStatus* out_status)
     return false;
 }
 
+static bool append_parsed_card(CardNode** head, CardNode** tail, const Card* card)
+{
+    CardNode* node;
+
+    if (head == NULL || tail == NULL || card == NULL)
+    {
+        return false;
+    }
+
+    node = (CardNode*)malloc(sizeof(CardNode));
+    if (node == NULL)
+    {
+        return false;
+    }
+
+    node->card = *card;
+    node->next = NULL;
+
+    if (*head == NULL)
+    {
+        *head = node;
+        *tail = node;
+    }
+    else
+    {
+        (*tail)->next = node;
+        *tail = node;
+    }
+
+    return true;
+}
+
 static void write_card_line(FILE* file, const Card* card)
 {
     fprintf(file,
@@ -54,26 +86,6 @@ static void write_card_line(FILE* file, const Card* card)
             card->openTime,
             card->expireTime,
             card->lastUseTime);
-}
-
-bool save_card(const Card* card, const char* file_path)
-{
-    FILE* file;
-
-    if (card == NULL || file_path == NULL)
-    {
-        return false;
-    }
-
-    file = fopen(file_path, "a");
-    if (file == NULL)
-    {
-        return false;
-    }
-
-    write_card_line(file, card);
-    fclose(file);
-    return true;
 }
 
 bool save_all_cards(const CardNode* head, const char* file_path)
@@ -222,25 +234,10 @@ CardNode* read_cards(const char* file_path)
             continue;
         }
 
-        node = (CardNode*)malloc(sizeof(CardNode));
-        if (node == NULL)
+        if (!append_parsed_card(&head, &tail, &parsed_card))
         {
             fclose(file);
             return head;
-        }
-
-        node->card = parsed_card;
-        node->next = NULL;
-
-        if (head == NULL)
-        {
-            head = node;
-            tail = node;
-        }
-        else
-        {
-            tail->next = node;
-            tail = node;
         }
     }
 
