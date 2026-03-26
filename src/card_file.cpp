@@ -2,7 +2,9 @@
 #include <tool.h>
 
 #include <fstream>
+#include <list>
 #include <sstream>
+#include <vector>
 
 namespace
 {
@@ -69,7 +71,7 @@ bool saveCard(const Card& card, const std::string& filePath)
     return out.good();
 }
 
-bool saveAllCards(const std::vector<Card>& cards, const std::string& filePath)
+bool saveAllCards(const std::list<Card>& cards, const std::string& filePath)
 {
     std::ofstream out(filePath, std::ios::trunc);
     if (!out.is_open())
@@ -105,20 +107,18 @@ bool parseCard(const std::string& line, Card& outCard)
         start = pos + 2;
     }
 
-    if (fields.size() != 9)
+    if (fields.size() != 8)
     {
         return false;
     }
 
     int id = 0;
     Fen balanceCent = 0;
-    int inSessionNumber = 0;
 
     try
     {
         id = std::stoi(fields[0]);
         balanceCent = static_cast<Fen>(std::stoll(fields[3]));
-        inSessionNumber = std::stoi(fields[5]);
     }
     catch (const std::exception&)
     {
@@ -137,12 +137,12 @@ bool parseCard(const std::string& line, Card& outCard)
         return false;
     }
 
-    if (fields[6] != "永久" && !stringToTime(fields[7], parsedTime))
+    if (fields[6] != "永久" && !stringToTime(fields[6], parsedTime))
     {
         return false;
     }
 
-    if (fields[7] != "-" && !stringToTime(fields[8], parsedTime))
+    if (fields[7] != "-" && !stringToTime(fields[7], parsedTime))
     {
         return false;
     }
@@ -156,9 +156,9 @@ bool parseCard(const std::string& line, Card& outCard)
     return true;
 }
 
-std::vector<Card> readCard(const std::string& filePath)
+std::list<Card> readCard(const std::string& filePath)
 {
-    std::vector<Card> cards;
+    std::list<Card> cards;
     std::ifstream in(filePath);
     if (!in.is_open())
     {
@@ -176,7 +176,7 @@ std::vector<Card> readCard(const std::string& filePath)
         Card parsedCard(1000000, "temp", "123456", 0);
         if (parseCard(line, parsedCard))
         {
-            cards.push_back(std::move(parsedCard));
+            cards.emplace_back(std::move(parsedCard));
         }
     }
 

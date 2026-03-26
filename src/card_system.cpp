@@ -11,9 +11,9 @@
 #include <sstream>
 #include <stdexcept>
 #include <utility>
-#include <vector>
+#include <list>
 
-static std::vector<Card> g_cards;
+static std::list<Card> g_cards;
 
 static void persistAllCardsToFile()
 {
