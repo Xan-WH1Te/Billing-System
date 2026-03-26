@@ -1,0 +1,7 @@
+{
+  "terminal.external.windowsExec": "wt.exe",
+  "terminal.explorerKind": "external",
+  "terminal.integrated.defaultProfile.windows": "PowerShell",
+  "terminal.integrated.cwd": "${workspaceFolder}",
+  "terminal.integrated.splitCwd": "workspaceRoot"
+}
