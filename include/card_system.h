@@ -1,81 +1,64 @@
 #pragma once
 
-#include <string>
-#include <utility>
+#include <stdbool.h>
 
-using Fen = long long;
+typedef long long Fen;
 
-enum class CardStatus
+#define OWNER_NAME_MAX_LEN 7
+#define PIN_MAX_LEN 6
+#define TIME_TEXT_MAX_LEN 31
+
+typedef enum CardStatus
 {
     Active,
     LoggedOut,
     OutofDate
-};
+} CardStatus;
 
-enum class TxType {
+typedef enum TxType
+{
     Recharge,
     Refund,
     StartSession, 
     EndSession
-};
+} TxType;
 
-bool isValidPin(const std::string& pin);
-
-void waitEnter();
-
-struct TxRecord
+typedef struct TxRecord
 {
-    int cardID{};
-    Fen amount{};
-    TxType type{};
-    
-};
+    int cardID;
+    Fen amount;
+    TxType type;
+} TxRecord;
 
-class Card
+typedef struct Card
 {
-    private:
-        int id_;
-        std::string ownerName_;
-        Fen balanceCent_{0};
-        CardStatus status_{CardStatus::Active};
-        bool inSession_{false};
-        std::string pin_;
-        std::string openTime_;
-        std::string expireTime_{"永久"};
-        std::string lastUseTime_{"-"};
-    public:
-        Card(int id, std::string owner, const std::string& pin, Fen initBalance = 0);
-        
-        int getID() const { return id_; };
-        const std::string& getOwnerName() const { return ownerName_; }
-        Fen getBalanceCent() const { return balanceCent_; }
-        CardStatus getStatus() const { return status_; }
-        bool isInSession() const { return inSession_; }
-        const std::string& getOpenTime() const { return openTime_; }
-        const std::string& getExpireTime() const { return expireTime_; }
-        const std::string& getLastUseTime() const { return lastUseTime_; }
-        const std::string& getPin() const { return pin_; }
-        bool verifyPin(const std::string& pin) const { return pin_ == pin; }
-        void setBalanceCent(Fen balance) { balanceCent_ = balance; }
-        void setStatus(CardStatus status) { status_ = status; }
-        void setInSession(bool inSession) { inSession_ = inSession; }
-        void setOpenTime(std::string openTime) { openTime_ = std::move(openTime); }
-        void setExpireTime(std::string expireTime) { expireTime_ = std::move(expireTime); }
-        void setLastUseTime(std::string lastUseTime) { lastUseTime_ = std::move(lastUseTime); }
-        void markLastUseNow();
-    
-};
+    int id;
+    char ownerName[OWNER_NAME_MAX_LEN + 1];
+    Fen balanceCent;
+    CardStatus status;
+    int inSession;
+    char pin[PIN_MAX_LEN + 1];
+    char openTime[TIME_TEXT_MAX_LEN + 1];
+    char expireTime[TIME_TEXT_MAX_LEN + 1];
+    char lastUseTime[TIME_TEXT_MAX_LEN + 1];
+} Card;
 
-class CardService
+typedef struct CardNode
 {
-    public:
-        static void loadCardsFromFile();
-        static void addCard();
-        static void queryCard();
-        static void startSession();
-        static void endSession();
-        static void recharge();
-        static void refund();
-        static void queryStats();
-        static void deleteCard();
-};
+    Card card;
+    struct CardNode* next;
+} CardNode;
+
+bool is_valid_pin(const char* pin);
+void wait_enter(void);
+
+void card_service_load_cards_from_file(void);
+void card_service_add_card(void);
+void card_service_query_card(void);
+void card_service_start_session(void);
+void card_service_end_session(void);
+void card_service_recharge(void);
+void card_service_refund(void);
+void card_service_query_stats(void);
+void card_service_delete_card(void);
+void card_service_free_all(void);

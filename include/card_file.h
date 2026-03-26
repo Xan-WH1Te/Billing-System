@@ -2,10 +2,9 @@
 
 #include <card_system.h>
 
-#include <list>
-#include <string>
+#include <stdbool.h>
 
-bool saveCard(const Card& card, const std::string& filePath = "card.txt");
-bool saveAllCards(const std::list<Card>& cards, const std::string& filePath = "card.txt");
-std::list<Card> readCard(const std::string& filePath = "card.txt");
-bool parseCard(const std::string& line, Card& outCard);
+bool save_card(const Card* card, const char* file_path);
+bool save_all_cards(const CardNode* head, const char* file_path);
+CardNode* read_cards(const char* file_path);
+bool parse_card_line(const char* line, Card* out_card);

@@ -1,6 +1,6 @@
 #pragma once
 
-#include <ctime>
-#include <string>
+#include <stdbool.h>
+#include <time.h>
 
-bool stringToTime(const std::string& timeText, std::time_t& outTime);
+bool string_to_time(const char* time_text, time_t* out_time);
