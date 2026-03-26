@@ -1,9 +1,8 @@
 #pragma once
 
-#include <card_system.h>
+#include <model.h>
 
 #include <stdbool.h>
 
-bool save_all_cards(const CardNode* head, const char* file_path);
-CardNode* read_cards(const char* file_path);
-bool parse_card_line(const char* line, Card* out_card);
+bool card_file_save_all(const CardNode* head, const char* file_path);
+CardNode* card_file_load_all(const char* file_path);

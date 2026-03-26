@@ -6,61 +6,28 @@
 #include <string.h>
 
 #define CARD_LINE_MAX_LEN 512
+#include <card_file.h>
+#include <tool.h>
 
-static const char* status_to_text(CardStatus status)
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define CARD_LINE_MAX_LEN 512
+
+static int append_node(CardNode** head, CardNode** tail, const Card* card)
 {
-    switch (status)
-    {
-    case Active:
-        return "Active";
-    case LoggedOut:
-        return "LoggedOut";
-    case OutofDate:
-        return "OutofDate";
-    default:
-        return "UnknownStatus";
-    }
-}
+    CardNode* node = (CardNode*)malloc(sizeof(CardNode));
 
-static bool text_to_status(const char* text, CardStatus* out_status)
-{
-    if (strcmp(text, "Active") == 0)
+    if (node == 0)
     {
-        *out_status = Active;
-        return true;
-    }
-    if (strcmp(text, "LoggedOut") == 0)
-    {
-        *out_status = LoggedOut;
-        return true;
-    }
-    if (strcmp(text, "OutofDate") == 0)
-    {
-        *out_status = OutofDate;
-        return true;
-    }
-    return false;
-}
-
-static bool append_parsed_card(CardNode** head, CardNode** tail, const Card* card)
-{
-    CardNode* node;
-
-    if (head == NULL || tail == NULL || card == NULL)
-    {
-        return false;
+        return 0;
     }
 
-    node = (CardNode*)malloc(sizeof(CardNode));
-    if (node == NULL)
-    {
-        return false;
-    }
+    node->data = *card;
+    node->next = 0;
 
-    node->card = *card;
-    node->next = NULL;
-
-    if (*head == NULL)
+    if (*head == 0)
     {
         *head = node;
         *tail = node;
@@ -71,43 +38,40 @@ static bool append_parsed_card(CardNode** head, CardNode** tail, const Card* car
         *tail = node;
     }
 
-    return true;
+    return 1;
 }
 
-static void write_card_line(FILE* file, const Card* card)
-{
-    fprintf(file,
-            "%d##%s##%s##%lld##%s##%s##%s##%s\n",
-            card->id,
-            card->ownerName,
-            card->pin,
-            card->balanceCent,
-            status_to_text(card->status),
-            card->openTime,
-            card->expireTime,
-            card->lastUseTime);
-}
-
-bool save_all_cards(const CardNode* head, const char* file_path)
+bool card_file_save_all(const CardNode* head, const char* file_path)
 {
     FILE* file;
     const CardNode* current;
 
-    if (file_path == NULL)
+    if (file_path == 0)
     {
         return false;
     }
 
     file = fopen(file_path, "w");
-    if (file == NULL)
+    if (file == 0)
     {
         return false;
     }
 
     current = head;
-    while (current != NULL)
+    while (current != 0)
     {
-        write_card_line(file, &current->card);
+        fprintf(file,
+                "%s##%s##%d##%lld##%lld##%.2f##%lld##%d##%.2f##%d\n",
+                current->data.aName,
+                current->data.aPwd,
+                current->data.nStatus,
+                (long long)current->data.tStart,
+                (long long)current->data.tEnd,
+                current->data.fTotalUse,
+                (long long)current->data.tLast,
+                current->data.nUseCount,
+                current->data.fBalance,
+                current->data.nDel);
         current = current->next;
     }
 
@@ -115,129 +79,61 @@ bool save_all_cards(const CardNode* head, const char* file_path)
     return true;
 }
 
-bool parse_card_line(const char* line, Card* out_card)
-{
-    char buffer[CARD_LINE_MAX_LEN];
-    char* fields[8];
-    int count = 0;
-    char* start;
-    char* pos;
-    time_t parsed_time;
-
-    if (line == NULL || out_card == NULL)
-    {
-        return false;
-    }
-
-    strncpy(buffer, line, sizeof(buffer) - 1);
-    buffer[sizeof(buffer) - 1] = '\0';
-
-    start = buffer;
-    while (count < 8)
-    {
-        pos = strstr(start, "##");
-        if (pos == NULL)
-        {
-            fields[count++] = start;
-            break;
-        }
-
-        *pos = '\0';
-        fields[count++] = start;
-        start = pos + 2;
-    }
-
-    if (count != 8)
-    {
-        return false;
-    }
-
-    out_card->id = atoi(fields[0]);
-    strncpy(out_card->ownerName, fields[1], OWNER_NAME_MAX_LEN);
-    out_card->ownerName[OWNER_NAME_MAX_LEN] = '\0';
-
-    strncpy(out_card->pin, fields[2], PIN_MAX_LEN);
-    out_card->pin[PIN_MAX_LEN] = '\0';
-
-    out_card->balanceCent = atoll(fields[3]);
-
-    if (!text_to_status(fields[4], &out_card->status))
-    {
-        return false;
-    }
-
-    if (!string_to_time(fields[5], &parsed_time))
-    {
-        return false;
-    }
-
-    if (strcmp(fields[6], "永久") != 0 && !string_to_time(fields[6], &parsed_time))
-    {
-        return false;
-    }
-
-    if (strcmp(fields[7], "-") != 0 && !string_to_time(fields[7], &parsed_time))
-    {
-        return false;
-    }
-
-    strncpy(out_card->openTime, fields[5], TIME_TEXT_MAX_LEN);
-    out_card->openTime[TIME_TEXT_MAX_LEN] = '\0';
-
-    strncpy(out_card->expireTime, fields[6], TIME_TEXT_MAX_LEN);
-    out_card->expireTime[TIME_TEXT_MAX_LEN] = '\0';
-
-    strncpy(out_card->lastUseTime, fields[7], TIME_TEXT_MAX_LEN);
-    out_card->lastUseTime[TIME_TEXT_MAX_LEN] = '\0';
-
-    out_card->inSession = 0;
-    return true;
-}
-
-CardNode* read_cards(const char* file_path)
+CardNode* card_file_load_all(const char* file_path)
 {
     FILE* file;
     char line[CARD_LINE_MAX_LEN];
-    CardNode* head = NULL;
-    CardNode* tail = NULL;
+    CardNode* head = 0;
+    CardNode* tail = 0;
 
-    if (file_path == NULL)
+    if (file_path == 0)
     {
-        return NULL;
+        return 0;
     }
 
     file = fopen(file_path, "r");
-    if (file == NULL)
+    if (file == 0)
     {
-        return NULL;
+        return 0;
     }
 
-    while (fgets(line, sizeof(line), file) != NULL)
+    while (fgets(line, sizeof(line), file) != 0)
     {
-        size_t len = strlen(line);
-        Card parsed_card;
-        CardNode* node;
+        Card card;
+        long long t_start;
+        long long t_end;
+        long long t_last;
 
-        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
-        {
-            line[len - 1] = '\0';
-            --len;
-        }
-
-        if (len == 0)
+        trim_newline(line);
+        if (line[0] == '\0')
         {
             continue;
         }
 
-        if (!parse_card_line(line, &parsed_card))
+        memset(&card, 0, sizeof(card));
+        if (sscanf(line,
+                   "%17[^#]##%7[^#]##%d##%lld##%lld##%f##%lld##%d##%f##%d",
+                   card.aName,
+                   card.aPwd,
+                   &card.nStatus,
+                   &t_start,
+                   &t_end,
+                   &card.fTotalUse,
+                   &t_last,
+                   &card.nUseCount,
+                   &card.fBalance,
+                   &card.nDel) != 10)
         {
             continue;
         }
 
-        if (!append_parsed_card(&head, &tail, &parsed_card))
+        card.tStart = (time_t)t_start;
+        card.tEnd = (time_t)t_end;
+        card.tLast = (time_t)t_last;
+
+        if (!append_node(&head, &tail, &card))
         {
-            fclose(file);
-            return head;
+            break;
         }
     }
 

@@ -6,8 +6,12 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 
 add_executable(billing
     src/main.c
-    src/card_system.c
+    src/menu.c
+    src/service.c
+    src/card_service.c
+    src/billing_service.c
     src/card_file.c
+    src/billing_file.c
     src/tool.c
 )
 

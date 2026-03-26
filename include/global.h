@@ -1,0 +1,18 @@
+#pragma once
+
+#define CARD_FILE_PATH "card.txt"
+#define BILLING_FILE_PATH "billing.txt"
+
+#define INPUT_BUFFER_SIZE 128
+#define CARD_NAME_LEN 18
+#define CARD_PWD_LEN 8
+
+#define CARD_STATUS_OFFLINE 0
+#define CARD_STATUS_ONLINE 1
+#define CARD_STATUS_DELETED 2
+
+#define BILLING_STATUS_UNSETTLED 0
+#define BILLING_STATUS_SETTLED 1
+
+#define MONEY_STATUS_RECHARGE 0
+#define MONEY_STATUS_REFUND 1

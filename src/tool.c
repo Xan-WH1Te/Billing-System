@@ -1,6 +1,7 @@
 #include <tool.h>
 
 #include <stdio.h>
+#include <string.h>
 
 bool string_to_time(const char* time_text, time_t* out_time)
 {
@@ -32,4 +33,58 @@ bool string_to_time(const char* time_text, time_t* out_time)
 
     *out_time = mktime(&tm_time);
     return *out_time != (time_t)-1;
+}
+
+void time_to_string(time_t value, char* out, size_t out_size)
+{
+    struct tm* tm_ptr;
+
+    if (out == 0 || out_size == 0)
+    {
+        return;
+    }
+
+    if (value == 0)
+    {
+        strncpy(out, "-", out_size - 1);
+        out[out_size - 1] = '\0';
+        return;
+    }
+
+    tm_ptr = localtime(&value);
+    if (tm_ptr == 0)
+    {
+        strncpy(out, "-", out_size - 1);
+        out[out_size - 1] = '\0';
+        return;
+    }
+
+    strftime(out, out_size, "%Y-%m-%d %H:%M:%S", tm_ptr);
+}
+
+void trim_newline(char* text)
+{
+    size_t len;
+
+    if (text == 0)
+    {
+        return;
+    }
+
+    len = strlen(text);
+    while (len > 0 && (text[len - 1] == '\n' || text[len - 1] == '\r'))
+    {
+        text[len - 1] = '\0';
+        --len;
+    }
+}
+
+void wait_enter(void)
+{
+    int ch;
+
+    printf("按回车键继续...");
+    while ((ch = getchar()) != '\n' && ch != EOF)
+    {
+    }
 }
