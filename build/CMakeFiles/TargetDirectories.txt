@@ -1,3 +1,0 @@
-D:/Google Drive Native/Billing System/build/CMakeFiles/billing.dir
-D:/Google Drive Native/Billing System/build/CMakeFiles/edit_cache.dir
-D:/Google Drive Native/Billing System/build/CMakeFiles/rebuild_cache.dir
