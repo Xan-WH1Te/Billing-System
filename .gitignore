@@ -21,3 +21,6 @@ Makefile
 # CMake/IDE metadata
 *.rsp
 *.ts
+
+# Local diagnostics
+gcm-diagnose.log
