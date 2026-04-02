@@ -9,9 +9,7 @@ add_executable(billing
     src/menu.c
     src/service.c
     src/card_service.c
-    src/billing_service.c
     src/card_file.c
-    src/billing_file.c
     src/tool.c
 )
 

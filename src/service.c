@@ -1,11 +1,9 @@
 #include <service.h>
-#include <billing_service.h>
 #include <card_service.h>
 
 /* 初始化各业务子服务。 */
 void service_init(void)
 {
-    billing_service_init();
     card_service_load();
 }
 
@@ -13,7 +11,6 @@ void service_init(void)
 void service_cleanup(void)
 {
     card_service_free();
-    billing_service_cleanup();
 }
 
 /* 以下函数作为菜单层到卡业务层的转发门面。 */

@@ -4,6 +4,7 @@
 #include <tool.h>
 
 #include <ctype.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -394,6 +395,8 @@ void card_service_query_card(void)
 void card_service_start_session(void)
 {
     char card_name[INPUT_BUFFER_SIZE];
+    char pwd[INPUT_BUFFER_SIZE];
+    char start_time_text[32];
     CardNode* node;
 
     if (!read_line("[上机] 请输入卡号：", card_name, sizeof(card_name)))
@@ -428,18 +431,108 @@ void card_service_start_session(void)
         return;
     }
 
+    if (!read_line("[上机] 请输入密码：", pwd, sizeof(pwd)))
+    {
+        print_cancelled();
+        return;
+    }
+    if (is_cancel_input(pwd))
+    {
+        print_cancelled();
+        return;
+    }
+    if (strcmp(node->data.aPwd, pwd) != 0)
+    {
+        printf("密码错误，上机失败。\n");
+        wait_enter();
+        return;
+    }
+
     node->data.nStatus = CARD_STATUS_ONLINE;
     /* tLast 作为最近一次“开始上机”时间。 */
     node->data.tLast = time(0);
     card_service_save();
+    time_to_string(node->data.tLast, start_time_text, sizeof(start_time_text));
     printf("上机成功。\n");
+    printf("卡号：%s\n", node->data.aName);   
+    printf("当前余额：%.2f 元\n", node->data.fBalance);
+    printf("上机时间：%s\n", start_time_text);
+
     wait_enter();
 }
 
-/* 下机功能占位。 */
 void card_service_end_session(void)
 {
-    printf("[下机] 功能待实现\n");
+    char card_name[INPUT_BUFFER_SIZE];
+    char end_time_text[32];
+    char start_time_text[32];
+    time_t end_time;
+    double seconds_used;
+    double hours_used;
+    float amount;
+    CardNode* node;
+
+    if (!read_line("[下机] 请输入卡号：", card_name, sizeof(card_name)))
+    {
+        print_cancelled();
+        return;
+    }
+    if (is_cancel_input(card_name))
+    {
+        print_cancelled();
+        return;
+    }
+
+    node = find_card_node(card_name);
+    /* 依次校验：存在性、是否注销、是否已下机。 */
+    if (node == 0 || node->data.nDel == 1)
+    {
+        printf("卡号不存在。\n");
+        wait_enter();
+        return;
+    }
+    if (node->data.nStatus == CARD_STATUS_DELETED)
+    {
+        printf("该卡已注销，无法下机。\n");
+        wait_enter();
+        return;
+    }
+    if (node->data.nStatus == CARD_STATUS_OFFLINE)
+    {
+        printf("该卡已下机。\n");
+        wait_enter();
+        return;
+    }
+
+    node->data.nStatus = CARD_STATUS_OFFLINE;
+    end_time = time(0);
+    seconds_used = difftime(end_time, node->data.tLast);
+    hours_used = seconds_used / 3600.0;
+    amount = (float)(ceil(hours_used) * 2.0); /* 费用计算：每小时 2 元，按实际使用时间计费。 */
+    node->data.fTotalUse += hours_used;
+    node->data.fBalance -= amount;
+    node->data.nUseCount += 1;
+
+    /* 计算本次使用时长和费用，更新累计使用和余额。 */
+    card_service_save();
+
+    time_to_string(node->data.tLast, start_time_text, sizeof(start_time_text));
+    time_to_string(end_time, end_time_text, sizeof(end_time_text));
+
+    printf("-------------下机成功-------------\n");
+    printf("卡号\t上机时间\t\t下机时间\t\t本次时长<小时>\t本次消费<元>\t余额<元>\n");
+    printf("%s\t%s\t%s\t%.2f\t\t%.2f\t\t%.2f\n",
+           node->data.aName,
+           start_time_text,
+           end_time_text,
+           hours_used,
+           amount,
+           node->data.fBalance);
+
+    if (node->data.fBalance < 0.0f)
+    {
+        printf("警告：余额不足，已欠费 %.2f 元，请尽快充值。\n", -node->data.fBalance);
+    }
     wait_enter();
 }
 

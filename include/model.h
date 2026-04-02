@@ -17,16 +17,6 @@ typedef struct Card
     int nDel;
 } Card;
 
-typedef struct Billing
-{
-    char aCardName[CARD_NAME_LEN + 1];
-    time_t tStart;
-    time_t tEnd;
-    float fAmount;
-    int nStatus;
-    int nDel;
-} Billing;
-
 typedef struct LogonInfo
 {
     char aCardName[CARD_NAME_LEN + 1];
@@ -57,9 +47,3 @@ typedef struct CardNode
     Card data;
     struct CardNode* next;
 } CardNode;
-
-typedef struct BillingNode
-{
-    Billing data;
-    struct BillingNode* next;
-} BillingNode;
