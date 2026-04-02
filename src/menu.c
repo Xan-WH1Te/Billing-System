@@ -4,6 +4,7 @@
 
 #include <stdio.h>
 
+/* 读取并校验菜单编号输入，仅接受 0~8 的纯数字输入。 */
 static int read_menu_choice(int* out_choice)
 {
     char line[64];
@@ -22,6 +23,7 @@ static int read_menu_choice(int* out_choice)
     return *out_choice >= 0 && *out_choice <= 8;
 }
 
+/* 主菜单循环：展示菜单、读取选择并分发到 service 层。 */
 void menu_loop(void)
 {
     while (1)
@@ -43,6 +45,7 @@ void menu_loop(void)
 
         if (!read_menu_choice(&choice))
         {
+            /* 输入解析失败时提示并等待用户继续。 */
             printf("\n输入无效，请输入数字。 按回车键继续...");
             wait_enter();
             continue;
@@ -56,6 +59,7 @@ void menu_loop(void)
 
         switch (choice)
         {
+        /* 菜单编号与业务动作一一对应。 */
         case 1: service_add_card(); break;
         case 2: service_query_card(); break;
         case 3: service_start_session(); break;

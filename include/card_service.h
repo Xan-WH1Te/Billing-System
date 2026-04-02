@@ -1,7 +1,6 @@
 #pragma once
 
 void card_service_load(void);
-void card_service_save(void);
 void card_service_free(void);
 
 void card_service_add_card(void);

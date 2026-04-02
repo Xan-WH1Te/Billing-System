@@ -9,14 +9,17 @@
 #include <string.h>
 #include <time.h>
 
+/* 全局卡链表头指针，服务生命周期内常驻内存。 */
 static CardNode* g_card_head = 0;
 
+/* 判断用户输入是否为取消命令 q/Q（忽略空白）。 */
 static int is_cancel_input(const char* text)
 {
     char temp[16];
     size_t i = 0;
     size_t j = 0;
 
+    /* 过滤所有空白后再比较，允许用户输入 " q " 等形式。 */
     while (text[i] != '\0' && j + 1 < sizeof(temp))
     {
         if (!isspace((unsigned char)text[i]))
@@ -30,11 +33,13 @@ static int is_cancel_input(const char* text)
     return j == 1 && (temp[0] == 'q' || temp[0] == 'Q');
 }
 
+/* 统一的取消提示输出。 */
 static void print_cancelled(void)
 {
     printf("已取消，返回菜单。\n");
 }
 
+/* 按卡号在线性链表中查找节点。 */
 static CardNode* find_card_node(const char* card_name)
 {
     CardNode* current = g_card_head;
@@ -51,6 +56,34 @@ static CardNode* find_card_node(const char* card_name)
     return 0;
 }
 
+/* 关键字匹配：当前仅在卡号字段中做子串匹配。 */
+static int card_match_keyword(const Card* card, const char* kw)
+{
+    return strstr(card->aName, kw) != 0;
+}
+
+static const char* status_to_text(int n_status);
+
+/* 打印查询结果的一行明细。 */
+static void print_card_detail_row(const Card* card)
+{
+    char end_text[32];
+    char last_text[32];
+
+    time_to_string(card->tEnd, end_text, sizeof(end_text));
+    time_to_string(card->tLast, last_text, sizeof(last_text));
+
+    printf("%s\t%s\t%.2f\t%s\t%.1f\t%d\t%s\n",
+           card->aName,
+           status_to_text(card->nStatus),
+           card->fBalance,
+           end_text,
+           card->fTotalUse,
+           card->nUseCount,
+           last_text);
+}
+
+/* 将卡记录追加到全局链表尾部。 */
 static int append_card(const Card* card)
 {
     CardNode* node = (CardNode*)malloc(sizeof(CardNode));
@@ -70,6 +103,7 @@ static int append_card(const Card* card)
         return 1;
     }
 
+    /* 单链表无尾指针，追加时需要先遍历到末尾。 */
     tail = g_card_head;
     while (tail->next != 0)
     {
@@ -79,6 +113,7 @@ static int append_card(const Card* card)
     return 1;
 }
 
+/* 校验卡号：必须是 7 位数字。 */
 static int is_valid_card_name(const char* card_name)
 {
     size_t length = strlen(card_name);
@@ -100,6 +135,7 @@ static int is_valid_card_name(const char* card_name)
     return 1;
 }
 
+/* 校验密码：必须是 6 位数字。 */
 static int is_valid_pwd(const char* pwd)
 {
     size_t i;
@@ -120,6 +156,7 @@ static int is_valid_pwd(const char* pwd)
     return 1;
 }
 
+/* 将状态码映射为展示文本。 */
 static const char* status_to_text(int n_status)
 {
     if (n_status == CARD_STATUS_OFFLINE)
@@ -137,6 +174,7 @@ static const char* status_to_text(int n_status)
     return "UnknownStatus";
 }
 
+/* 通用行输入函数：打印提示并去除末尾换行。 */
 static int read_line(const char* prompt, char* out, size_t out_size)
 {
     printf("%s", prompt);
@@ -148,13 +186,16 @@ static int read_line(const char* prompt, char* out, size_t out_size)
     return 1;
 }
 
+/* 从文件加载卡数据到内存。 */
 void card_service_load(void)
 {
+    /* 先释放旧数据，避免重复加载导致链表泄漏。 */
     card_service_free();
     g_card_head = card_file_load_all(CARD_FILE_PATH);
 }
 
-void card_service_save(void)
+/* 将当前内存中的卡数据落盘。 */
+static void card_service_save(void)
 {
     if (!card_file_save_all(g_card_head, CARD_FILE_PATH))
     {
@@ -162,6 +203,7 @@ void card_service_save(void)
     }
 }
 
+/* 释放全局卡链表内存。 */
 void card_service_free(void)
 {
     CardNode* current = g_card_head;
@@ -176,6 +218,7 @@ void card_service_free(void)
     g_card_head = 0;
 }
 
+/* 添加新卡：依次完成卡号、密码、初始余额输入与校验。 */
 void card_service_add_card(void)
 {
     char card_name[INPUT_BUFFER_SIZE];
@@ -187,6 +230,7 @@ void card_service_add_card(void)
 
     while (1)
     {
+        /* 卡号必须合法且唯一。 */
         if (!read_line("[添加卡] 请输入卡号<7位整数>：", card_name, sizeof(card_name)))
         {
             print_cancelled();
@@ -212,6 +256,7 @@ void card_service_add_card(void)
 
     while (1)
     {
+        /* 密码必须为 6 位数字。 */
         if (!read_line("[添加卡] 请输入6位密码：", pwd, sizeof(pwd)))
         {
             print_cancelled();
@@ -233,6 +278,7 @@ void card_service_add_card(void)
     while (1)
     {
         char* endptr;
+        /* 使用 strtof 做严格数值解析，拒绝空串和非数字尾随字符。 */
         if (!read_line("[添加卡] 请输入初始余额（元)：", balance_text, sizeof(balance_text)))
         {
             print_cancelled();
@@ -254,6 +300,7 @@ void card_service_add_card(void)
     }
 
     memset(&card, 0, sizeof(card));
+    /* 初始化新卡默认状态。 */
     strncpy(card.aName, card_name, sizeof(card.aName) - 1);
     strncpy(card.aPwd, pwd, sizeof(card.aPwd) - 1);
     card.nStatus = CARD_STATUS_OFFLINE;
@@ -274,6 +321,7 @@ void card_service_add_card(void)
 
     card_service_save();
 
+    /* 输出添加结果摘要。 */
     time_to_string(card.tStart, time_text, sizeof(time_text));
     printf("--------添加成功--------\n");
     printf("卡号\t密码\t余额<元>\t开卡时间\n");
@@ -281,12 +329,12 @@ void card_service_add_card(void)
     wait_enter();
 }
 
+/* 查询卡：支持精确卡号查询与关键字模糊查询。 */
 void card_service_query_card(void)
 {
     char card_name[INPUT_BUFFER_SIZE];
     CardNode* node;
-    char end_text[32];
-    char last_text[32];
+    int match_count = 0;
 
     if (!read_line("--------查询卡--------\n请输入卡号：", card_name, sizeof(card_name)))
     {
@@ -299,30 +347,50 @@ void card_service_query_card(void)
         return;
     }
 
-    node = find_card_node(card_name);
-    if (node == 0 || node->data.nDel == 1)
+    printf("-------------------------------查询结果------------------------------\n");
+    printf("卡号\t状态\t余额\t截止时间\t累计使用\t使用次数\t上次使用时间\n");
+
+    if (is_valid_card_name(card_name))
     {
-        printf("卡号不存在。\n");
+        /* 输入是标准卡号时走精确查询。 */
+        node = find_card_node(card_name);
+        if (node == 0 || node->data.nDel == 1)
+        {
+            printf("卡号不存在。\n");
+            wait_enter();
+            return;
+        }
+
+        print_card_detail_row(&node->data);
         wait_enter();
         return;
     }
 
-    time_to_string(node->data.tEnd, end_text, sizeof(end_text));
-    time_to_string(node->data.tLast, last_text, sizeof(last_text));
+    node = g_card_head;
+    /* 非标准卡号输入按关键字遍历匹配。 */
+    while (node != 0)
+    {
+        if (node->data.nDel == 0 && card_match_keyword(&node->data, card_name))
+        {
+            print_card_detail_row(&node->data);
+            ++match_count;
+        }
+        node = node->next;
+    }
 
-    printf("卡号\t状态\t余额\t截止时间\t累计使用\t使用次数\t上次使用时间\n");
-    printf("%s\t%s\t%.2f\t%s\t%.1f\t%d\t%s\n",
-           node->data.aName,
-           status_to_text(node->data.nStatus),
-           node->data.fBalance,
-           end_text,
-           node->data.fTotalUse,
-           node->data.nUseCount,
-           last_text);
+    if (match_count == 0)
+    {
+        printf("未找到匹配记录。\n");
+    }
+    else
+    {
+        printf("共找到 %d 条匹配记录。\n", match_count);
+    }
 
     wait_enter();
 }
 
+/* 上机：将卡状态切换为在线并记录最近上机时间。 */
 void card_service_start_session(void)
 {
     char card_name[INPUT_BUFFER_SIZE];
@@ -340,6 +408,7 @@ void card_service_start_session(void)
     }
 
     node = find_card_node(card_name);
+    /* 依次校验：存在性、是否注销、是否已在线。 */
     if (node == 0 || node->data.nDel == 1)
     {
         printf("卡号不存在。\n");
@@ -360,36 +429,42 @@ void card_service_start_session(void)
     }
 
     node->data.nStatus = CARD_STATUS_ONLINE;
+    /* tLast 作为最近一次“开始上机”时间。 */
     node->data.tLast = time(0);
     card_service_save();
     printf("上机成功。\n");
     wait_enter();
 }
 
+/* 下机功能占位。 */
 void card_service_end_session(void)
 {
     printf("[下机] 功能待实现\n");
     wait_enter();
 }
 
+/* 充值功能占位。 */
 void card_service_recharge(void)
 {
     printf("[充值] 功能待实现\n");
     wait_enter();
 }
 
+/* 退费功能占位。 */
 void card_service_refund(void)
 {
     printf("[退费] 功能待实现\n");
     wait_enter();
 }
 
+/* 统计查询功能占位。 */
 void card_service_query_stats(void)
 {
     printf("[查询统计] 功能待实现\n");
     wait_enter();
 }
 
+/* 注销卡：仅允许离线卡注销，并记录截止时间。 */
 void card_service_delete_card(void)
 {
     char card_name[INPUT_BUFFER_SIZE];
@@ -422,6 +497,7 @@ void card_service_delete_card(void)
     }
 
     node->data.nStatus = CARD_STATUS_DELETED;
+    /* nStatus 负责业务状态，nDel 作为持久化删除标记。 */
     node->data.nDel = 1;
     node->data.tEnd = time(0);
     card_service_save();

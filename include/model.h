@@ -1,11 +1,12 @@
 #pragma once
 
+#include <global.h>
 #include <time.h>
 
 typedef struct Card
 {
-    char aName[18];
-    char aPwd[8];
+    char aName[CARD_NAME_LEN + 1];
+    char aPwd[CARD_PWD_LEN + 1];
     int nStatus;
     time_t tStart;
     time_t tEnd;
@@ -18,7 +19,7 @@ typedef struct Card
 
 typedef struct Billing
 {
-    char aCardName[18];
+    char aCardName[CARD_NAME_LEN + 1];
     time_t tStart;
     time_t tEnd;
     float fAmount;
@@ -28,14 +29,14 @@ typedef struct Billing
 
 typedef struct LogonInfo
 {
-    char aCardName[18];
+    char aCardName[CARD_NAME_LEN + 1];
     time_t tLogon;
     float fBalance;
 } LogonInfo;
 
 typedef struct SettleInfo
 {
-    char aCardName[18];
+    char aCardName[CARD_NAME_LEN + 1];
     time_t tStart;
     time_t tEnd;
     float fAmount;
@@ -44,7 +45,7 @@ typedef struct SettleInfo
 
 typedef struct Money
 {
-    char aCardName[18];
+    char aCardName[CARD_NAME_LEN + 1];
     time_t tTime;
     int nStatus;
     float fMoney;

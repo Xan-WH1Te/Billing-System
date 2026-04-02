@@ -4,8 +4,8 @@
 #define BILLING_FILE_PATH "billing.txt"
 
 #define INPUT_BUFFER_SIZE 128
-#define CARD_NAME_LEN 18
-#define CARD_PWD_LEN 8
+#define CARD_NAME_LEN 7
+#define CARD_PWD_LEN 6
 
 #define CARD_STATUS_OFFLINE 0
 #define CARD_STATUS_ONLINE 1
