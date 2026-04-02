@@ -324,7 +324,7 @@ void card_service_add_card(void)
 
     /* 输出添加结果摘要。 */
     time_to_string(card.tStart, time_text, sizeof(time_text));
-    printf("--------添加成功--------\n");
+    printf("-------------添加成功-------------\n");
     printf("卡号\t密码\t余额<元>\t开卡时间\n");
     printf("%s\t%s\t%.2f \t%s\n", card.aName, card.aPwd, card.fBalance, time_text);
     wait_enter();
@@ -453,10 +453,12 @@ void card_service_start_session(void)
     node->data.tLast = time(0);
     card_service_save();
     time_to_string(node->data.tLast, start_time_text, sizeof(start_time_text));
-    printf("上机成功。\n");
-    printf("卡号：%s\n", node->data.aName);   
-    printf("当前余额：%.2f 元\n", node->data.fBalance);
-    printf("上机时间：%s\n", start_time_text);
+    printf("-------------上机成功-------------\n");
+    printf("卡号\t余额<元>\t上机时间\n");
+    printf("%s\t%.2f\t\t%s\n",
+           node->data.aName,
+           node->data.fBalance,
+           start_time_text);
 
     wait_enter();
 }
