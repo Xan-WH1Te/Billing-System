@@ -40,6 +40,12 @@ static void print_cancelled(void)
     printf("已取消，返回菜单。\n");
 }
 
+/* 统一输出业务分割标题。 */
+static void print_service_header(const char* action_name)
+{
+    printf("--------%s--------\n", action_name);
+}
+
 /* 按卡号在线性链表中查找节点。 */
 static CardNode* find_card_node(const char* card_name)
 {
@@ -187,6 +193,203 @@ static int read_line(const char* prompt, char* out, size_t out_size)
     return 1;
 }
 
+/* 读取并校验卡号格式（7位数字）。 */
+static int read_valid_card_name(const char* prompt, char* out, size_t out_size)
+{
+    while (1)
+    {
+        if (!read_line(prompt, out, out_size))
+        {
+            print_cancelled();
+            return 0;
+        }
+        if (is_cancel_input(out))
+        {
+            print_cancelled();
+            return 0;
+        }
+        if (!is_valid_card_name(out))
+        {
+            printf("卡号无效，请输入7位整数。\n");
+            continue;
+        }
+        return 1;
+    }
+}
+
+/* 读取并校验密码格式（6位数字）。 */
+static int read_valid_password(const char* prompt, char* out, size_t out_size)
+{
+    while (1)
+    {
+        if (!read_line(prompt, out, out_size))
+        {
+            print_cancelled();
+            return 0;
+        }
+        if (is_cancel_input(out))
+        {
+            print_cancelled();
+            return 0;
+        }
+        if (!is_valid_pwd(out))
+        {
+            printf("密码不合法,请检查再试\n");
+            continue;
+        }
+        return 1;
+    }
+}
+
+/* 严格解析浮点输入，要求整行都是数字格式。 */
+static int try_parse_float(const char* text, float* out_value)
+{
+    char* endptr;
+    float parsed = strtof(text, &endptr);
+
+    if (text[0] == '\0' || *endptr != '\0')
+    {
+        return 0;
+    }
+
+    *out_value = parsed;
+    return 1;
+}
+
+/* 读取并校验金额，支持设置最小值及是否允许等于最小值。 */
+static int read_amount_with_rule(const char* prompt,
+                                 float* out_amount,
+                                 float min_value,
+                                 int allow_equal_min)
+{
+    char amount_text[INPUT_BUFFER_SIZE];
+    float amount;
+
+    while (1)
+    {
+        if (!read_line(prompt, amount_text, sizeof(amount_text)))
+        {
+            print_cancelled();
+            return 0;
+        }
+        if (is_cancel_input(amount_text))
+        {
+            print_cancelled();
+            return 0;
+        }
+
+        if (!try_parse_float(amount_text, &amount))
+        {
+            printf("金额输入无效。\n");
+            continue;
+        }
+
+        if (allow_equal_min)
+        {
+            if (amount < min_value)
+            {
+                printf("金额输入无效。\n");
+                continue;
+            }
+        }
+        else
+        {
+            if (amount <= min_value)
+            {
+                printf("金额输入无效。\n");
+                continue;
+            }
+        }
+
+        *out_amount = amount;
+        return 1;
+    }
+}
+
+/* 按卡号获取存在的卡（未被逻辑删除）。 */
+static int get_existing_card_by_name(const char* card_name, CardNode** out_node)
+{
+    CardNode* node = find_card_node(card_name);
+
+    if (node == 0 || node->data.nDel == 1)
+    {
+        printf("卡号不存在。\n");
+        wait_enter();
+        return 0;
+    }
+
+    *out_node = node;
+    return 1;
+}
+
+/* 校验卡状态是否允许执行某个业务动作。 */
+static int ensure_card_not_deleted_for_action(const CardNode* node, const char* action_name)
+{
+    if (node->data.nStatus == CARD_STATUS_DELETED)
+    {
+        printf("该卡已注销，无法%s。\n", action_name);
+        wait_enter();
+        return 0;
+    }
+
+    return 1;
+}
+
+/* 校验卡状态是否等于期望状态，不满足时输出业务提示。 */
+static int ensure_card_status_for_action(const CardNode* node,
+                                         int expected_status,
+                                         const char* fail_message)
+{
+    if (node->data.nStatus != expected_status)
+    {
+        printf("%s\n", fail_message);
+        wait_enter();
+        return 0;
+    }
+
+    return 1;
+}
+
+/* 组合校验：先确保卡存在，再检查状态是否可用。 */
+static int get_usable_card_for_action(const char* card_name,
+                                      const char* action_name,
+                                      CardNode** out_node)
+{
+    if (!get_existing_card_by_name(card_name, out_node))
+    {
+        return 0;
+    }
+
+    if (!ensure_card_not_deleted_for_action(*out_node, action_name))
+    {
+        return 0;
+    }
+
+    return 1;
+}
+
+/* 读取密码并校验是否与卡内密码一致。 */
+static int verify_card_password(const CardNode* node,
+                                const char* prompt,
+                                const char* fail_message)
+{
+    char pwd[INPUT_BUFFER_SIZE];
+
+    if (!read_valid_password(prompt, pwd, sizeof(pwd)))
+    {
+        return 0;
+    }
+
+    if (strcmp(node->data.aPwd, pwd) != 0)
+    {
+        printf("%s\n", fail_message);
+        wait_enter();
+        return 0;
+    }
+
+    return 1;
+}
+
 /* 从文件加载卡数据到内存。 */
 void card_service_load(void)
 {
@@ -224,28 +427,18 @@ void card_service_add_card(void)
 {
     char card_name[INPUT_BUFFER_SIZE];
     char pwd[INPUT_BUFFER_SIZE];
-    char balance_text[INPUT_BUFFER_SIZE];
     Card card;
     float init_balance = 0.0f;
     char time_text[32];
 
+    print_service_header("添加卡");
+
     while (1)
     {
         /* 卡号必须合法且唯一。 */
-        if (!read_line("[添加卡] 请输入卡号<7位整数>：", card_name, sizeof(card_name)))
+        if (!read_valid_card_name("[添加卡] 请输入卡号<7位整数>：", card_name, sizeof(card_name)))
         {
-            print_cancelled();
             return;
-        }
-        if (is_cancel_input(card_name))
-        {
-            print_cancelled();
-            return;
-        }
-        if (!is_valid_card_name(card_name))
-        {
-            printf("卡号无效，请输入7位整数。\n");
-            continue;
         }
         if (find_card_node(card_name) != 0)
         {
@@ -255,49 +448,14 @@ void card_service_add_card(void)
         break;
     }
 
-    while (1)
+    if (!read_valid_password("[添加卡] 请输入6位密码：", pwd, sizeof(pwd)))
     {
-        /* 密码必须为 6 位数字。 */
-        if (!read_line("[添加卡] 请输入6位密码：", pwd, sizeof(pwd)))
-        {
-            print_cancelled();
-            return;
-        }
-        if (is_cancel_input(pwd))
-        {
-            print_cancelled();
-            return;
-        }
-        if (!is_valid_pwd(pwd))
-        {
-            printf("密码不合法,请检查再试\n");
-            continue;
-        }
-        break;
+        return;
     }
 
-    while (1)
+    if (!read_amount_with_rule("[添加卡] 请输入初始余额（元)：", &init_balance, 0.0f, 1))
     {
-        char* endptr;
-        /* 使用 strtof 做严格数值解析，拒绝空串和非数字尾随字符。 */
-        if (!read_line("[添加卡] 请输入初始余额（元)：", balance_text, sizeof(balance_text)))
-        {
-            print_cancelled();
-            return;
-        }
-        if (is_cancel_input(balance_text))
-        {
-            print_cancelled();
-            return;
-        }
-
-        init_balance = strtof(balance_text, &endptr);
-        if (balance_text[0] == '\0' || *endptr != '\0' || init_balance < 0.0f)
-        {
-            printf("金额输入无效。\n");
-            continue;
-        }
-        break;
+        return;
     }
 
     memset(&card, 0, sizeof(card));
@@ -337,7 +495,9 @@ void card_service_query_card(void)
     CardNode* node;
     int match_count = 0;
 
-    if (!read_line("--------查询卡--------\n请输入卡号：", card_name, sizeof(card_name)))
+    print_service_header("查询卡");
+
+    if (!read_line("请输入卡号：", card_name, sizeof(card_name)))
     {
         print_cancelled();
         return;
@@ -354,11 +514,8 @@ void card_service_query_card(void)
     if (is_valid_card_name(card_name))
     {
         /* 输入是标准卡号时走精确查询。 */
-        node = find_card_node(card_name);
-        if (node == 0 || node->data.nDel == 1)
+        if (!get_existing_card_by_name(card_name, &node))
         {
-            printf("卡号不存在。\n");
-            wait_enter();
             return;
         }
 
@@ -395,56 +552,27 @@ void card_service_query_card(void)
 void card_service_start_session(void)
 {
     char card_name[INPUT_BUFFER_SIZE];
-    char pwd[INPUT_BUFFER_SIZE];
     char start_time_text[32];
     CardNode* node;
 
-    if (!read_line("[上机] 请输入卡号：", card_name, sizeof(card_name)))
+    print_service_header("上机");
+
+    if (!read_valid_card_name("[上机] 请输入卡号：", card_name, sizeof(card_name)))
     {
-        print_cancelled();
-        return;
-    }
-    if (is_cancel_input(card_name))
-    {
-        print_cancelled();
         return;
     }
 
-    node = find_card_node(card_name);
-    /* 依次校验：存在性、是否注销、是否已在线。 */
-    if (node == 0 || node->data.nDel == 1)
+    if (!get_usable_card_for_action(card_name, "上机", &node))
     {
-        printf("卡号不存在。\n");
-        wait_enter();
         return;
     }
-    if (node->data.nStatus == CARD_STATUS_DELETED)
+    if (!ensure_card_status_for_action(node, CARD_STATUS_OFFLINE, "该卡已在上机中。"))
     {
-        printf("该卡已注销，无法上机。\n");
-        wait_enter();
-        return;
-    }
-    if (node->data.nStatus == CARD_STATUS_ONLINE)
-    {
-        printf("该卡已在上机中。\n");
-        wait_enter();
         return;
     }
 
-    if (!read_line("[上机] 请输入密码：", pwd, sizeof(pwd)))
+    if (!verify_card_password(node, "[上机] 请输入密码：", "密码错误，上机失败。"))
     {
-        print_cancelled();
-        return;
-    }
-    if (is_cancel_input(pwd))
-    {
-        print_cancelled();
-        return;
-    }
-    if (strcmp(node->data.aPwd, pwd) != 0)
-    {
-        printf("密码错误，上机失败。\n");
-        wait_enter();
         return;
     }
 
@@ -474,35 +602,19 @@ void card_service_end_session(void)
     float amount;
     CardNode* node;
 
-    if (!read_line("[下机] 请输入卡号：", card_name, sizeof(card_name)))
+    print_service_header("下机");
+
+    if (!read_valid_card_name("[下机] 请输入卡号：", card_name, sizeof(card_name)))
     {
-        print_cancelled();
-        return;
-    }
-    if (is_cancel_input(card_name))
-    {
-        print_cancelled();
         return;
     }
 
-    node = find_card_node(card_name);
-    /* 依次校验：存在性、是否注销、是否已下机。 */
-    if (node == 0 || node->data.nDel == 1)
+    if (!get_usable_card_for_action(card_name, "下机", &node))
     {
-        printf("卡号不存在。\n");
-        wait_enter();
         return;
     }
-    if (node->data.nStatus == CARD_STATUS_DELETED)
+    if (!ensure_card_status_for_action(node, CARD_STATUS_ONLINE, "该卡已下机。"))
     {
-        printf("该卡已注销，无法下机。\n");
-        wait_enter();
-        return;
-    }
-    if (node->data.nStatus == CARD_STATUS_OFFLINE)
-    {
-        printf("该卡已下机。\n");
-        wait_enter();
         return;
     }
 
@@ -538,24 +650,109 @@ void card_service_end_session(void)
     wait_enter();
 }
 
-/* 充值功能占位。 */
+/* 充值：校验卡号、状态、密码与金额后更新余额。 */
 void card_service_recharge(void)
 {
-    printf("[充值] 功能待实现\n");
+    char card_name[INPUT_BUFFER_SIZE];
+    char recharge_time_text[32];
+    float amount;
+    float old_balance;
+    CardNode* node;
+
+    print_service_header("充值");
+
+    if (!read_valid_card_name("[充值] 请输入卡号：", card_name, sizeof(card_name)))
+    {
+        return;
+    }
+
+    if (!get_usable_card_for_action(card_name, "充值", &node))
+    {
+        return;
+    }
+
+    if (!verify_card_password(node, "[充值] 请输入密码：", "密码错误，充值失败。"))
+    {
+        return;
+    }
+
+    if (!read_amount_with_rule("[充值] 请输入充值金额（元)：", &amount, 0.0f, 0))
+    {
+        return;
+    }
+
+    old_balance = node->data.fBalance;
+    node->data.fBalance += amount;
+    node->data.tLast = time(0);
+    card_service_save();
+        time_to_string(node->data.tLast, recharge_time_text, sizeof(recharge_time_text));
+        printf("-------------充值成功-------------\n");
+        printf("卡号\t充值金额<元>\t充值前余额<元>\t充值后余额<元>\t充值时间\n");
+        printf("%s\t%.2f\t\t%.2f\t\t%.2f\t\t%s\n",
+            node->data.aName,
+            amount,
+            old_balance,
+            node->data.fBalance,
+            recharge_time_text);
     wait_enter();
 }
 
-/* 退费功能占位。 */
 void card_service_refund(void)
 {
-    printf("[退费] 功能待实现\n");
+    char card_name[INPUT_BUFFER_SIZE];
+    char refund_time_text[32];
+    float amount;
+    float old_balance;
+    CardNode* node;
+    print_service_header("退费");
+    if (!read_valid_card_name("[退费] 请输入卡号：", card_name, sizeof(card_name)))
+    {
+        return;
+    }
+    if (!get_usable_card_for_action(card_name, "退费", &node))
+    {
+        return;
+    }
+    if (!verify_card_password(node, "[退费] 请输入密码：", "密码错误，退费失败。"))
+    {
+        return;
+    }
+    printf("当前余额：%.2f 元\n", node->data.fBalance);
+    while (1)
+    {
+        if (!read_amount_with_rule("[退费] 请输入退费金额（元)：", &amount, 0.0f, 0))
+        {
+            return;
+        }
+        if (amount > node->data.fBalance)
+        {
+            printf("退费金额不能大于当前余额。\n");
+            wait_enter();
+            continue;
+        }
+        break;
+    }
+
+    old_balance = node->data.fBalance;
+    node->data.fBalance -= amount;
+    node->data.tLast = time(0);
+    card_service_save();
+    time_to_string(node->data.tLast, refund_time_text, sizeof(refund_time_text));
+    printf("-------------退费成功-------------\n");
+    printf("卡号\t退费金额<元>\t退费前余额<元>\t退费后余额<元>\t退费时间\n");
+    printf("%s\t%.2f\t\t%.2f\t\t%.2f\t\t%s\n",
+        node->data.aName,
+        amount,
+        old_balance,
+        node->data.fBalance,
+        refund_time_text);
     wait_enter();
 }
 
-/* 统计查询功能占位。 */
 void card_service_query_stats(void)
 {
-    printf("[查询统计] 功能待实现\n");
+    print_service_header("查询统计");
+
     wait_enter();
 }
 
@@ -565,30 +762,34 @@ void card_service_delete_card(void)
     char card_name[INPUT_BUFFER_SIZE];
     CardNode* node;
     char end_time[32];
+    char refund_time_text[32];
+    float refund_amount = 0.0f;
 
-    if (!read_line("[注销卡] 请输入卡号：", card_name, sizeof(card_name)))
+    print_service_header("注销卡");
+
+    if (!read_valid_card_name("[注销卡] 请输入卡号：", card_name, sizeof(card_name)))
     {
-        print_cancelled();
         return;
     }
-    if (is_cancel_input(card_name))
+    if (!get_usable_card_for_action(card_name, "注销", &node))
     {
-        print_cancelled();
+        return;
+    }
+    if (!ensure_card_status_for_action(node, CARD_STATUS_OFFLINE, "该卡正在上机，无法注销。"))
+    {
+        return;
+    }
+    if (!verify_card_password(node, "[注销卡] 请输入密码：", "密码错误，注销失败。"))
+    {
         return;
     }
 
-    node = find_card_node(card_name);
-    if (node == 0 || node->data.nDel == 1)
+    /* 自动退所有费：注销时将正余额一次性退完并清零。 */
+    if (node->data.fBalance > 0.0f)
     {
-        printf("卡号不存在。\n");
-        wait_enter();
-        return;
-    }
-    if (node->data.nStatus == CARD_STATUS_ONLINE)
-    {
-        printf("该卡正在上机，无法注销。\n");
-        wait_enter();
-        return;
+        refund_amount = node->data.fBalance;
+        node->data.fBalance = 0.0f;
+        node->data.tLast = time(0);
     }
 
     node->data.nStatus = CARD_STATUS_DELETED;
@@ -597,7 +798,34 @@ void card_service_delete_card(void)
     node->data.tEnd = time(0);
     card_service_save();
 
+    if (refund_amount > 0.0f)
+    {
+        time_to_string(node->data.tLast, refund_time_text, sizeof(refund_time_text));
+        printf("-------------自动退费成功-------------\n");
+        printf("卡号\t退费金额<元>\t退费后余额<元>\t退费时间\n");
+        printf("%s\t%.2f\t\t%.2f\t\t%s\n",
+               node->data.aName,
+               refund_amount,
+               node->data.fBalance,
+               refund_time_text);
+    }
+    else if (node->data.fBalance < 0.0f)
+    {
+        printf("当前余额为 %.2f 元（欠费），本次无可退金额。\n", node->data.fBalance);
+    }
+    else
+    {
+        printf("当前余额为0.00元，本次无可退金额。\n");
+    }
+
     time_to_string(node->data.tEnd, end_time, sizeof(end_time));
-    printf("注销成功，卡号 %s 截止时间：%s\n", node->data.aName, end_time);
+    printf("-------------注销成功-------------\n");
+    printf("卡号\t状态\t截止时间\t\t余额<元>\t退费金额<元>\n");
+    printf("%s\t%s\t%s\t%.2f\t\t%.2f\n",
+           node->data.aName,
+           status_to_text(node->data.nStatus),
+           end_time,
+           node->data.fBalance,
+           refund_amount);
     wait_enter();
 }
