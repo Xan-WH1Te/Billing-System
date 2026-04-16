@@ -9,6 +9,22 @@
 
 #define CARD_LINE_MAX_LEN 512
 
+static int parse_money_storage_token(const char* token, MoneyCent* out_cent)
+{
+    if (token == 0 || out_cent == 0)
+    {
+        return 0;
+    }
+
+    /* 兼容旧格式（元小数）与新格式（分整数）。 */
+    if (strchr(token, '.') != 0)
+    {
+        return parse_yuan_to_cent_strict(token, out_cent) ? 1 : 0;
+    }
+
+    return parse_int64_strict(token, out_cent) ? 1 : 0;
+}
+
 static void free_all_nodes(CardNode* head)
 {
     while (head != 0)
@@ -82,7 +98,7 @@ static int card_record_is_valid(const Card* card)
     {
         return 0;
     }
-    if (!isfinite(card->fTotalUse) || !isfinite(card->fBalance))
+    if (!isfinite(card->fTotalUse))
     {
         return 0;
     }
@@ -141,7 +157,7 @@ bool card_file_save_all(const CardNode* head, const char* file_path)
         /* 以 "字段##字段" 的行格式写出，便于后续按行反序列化。 */
         /* 顺序固定：卡号, 密码, 状态, 开卡, 截止, 累计使用, 上次使用, 使用次数, 余额, 删除标记。 */
         write_result = fprintf(file,
-                               "%s##%s##%d##%lld##%lld##%.2f##%lld##%d##%.2f##%d\n",
+                               "%s##%s##%d##%lld##%lld##%.2f##%lld##%d##%lld##%d\n",
                                current->data.aName,
                                current->data.aPwd,
                                current->data.nStatus,
@@ -150,7 +166,7 @@ bool card_file_save_all(const CardNode* head, const char* file_path)
                                current->data.fTotalUse,
                                (long long)current->data.tLast,
                                current->data.nUseCount,
-                               current->data.fBalance,
+                               (long long)current->data.nBalanceCent,
                                current->data.nDel);
         if (write_result < 0)
         {
@@ -193,6 +209,7 @@ CardNode* card_file_load_all(const char* file_path)
         long long t_start;
         long long t_end;
         long long t_last;
+        char balance_text[64];
         size_t line_length;
 
         line_length = strlen(line);
@@ -213,7 +230,7 @@ CardNode* card_file_load_all(const char* file_path)
         memset(&card, 0, sizeof(card));
         /* 解析失败说明该行损坏，跳过并继续读取后续数据。 */
         if (sscanf(line,
-                   "%7[^#]##%6[^#]##%d##%lld##%lld##%f##%lld##%d##%f##%d",
+                   "%7[^#]##%6[^#]##%d##%lld##%lld##%f##%lld##%d##%63[^#]##%d",
                    card.aName,
                    card.aPwd,
                    &card.nStatus,
@@ -222,8 +239,13 @@ CardNode* card_file_load_all(const char* file_path)
                    &card.fTotalUse,
                    &t_last,
                    &card.nUseCount,
-                   &card.fBalance,
+                   balance_text,
                    &card.nDel) != 10)
+        {
+            continue;
+        }
+
+        if (!parse_money_storage_token(balance_text, &card.nBalanceCent))
         {
             continue;
         }
@@ -249,3 +271,4 @@ CardNode* card_file_load_all(const char* file_path)
     fclose(file);
     return head;
 }
+

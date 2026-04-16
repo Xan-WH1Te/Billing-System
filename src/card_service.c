@@ -6,27 +6,103 @@
 #include <tool.h>
 
 #include <ctype.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
-#define DEFAULT_BILLING_THRESHOLD_SECONDS 10.0f
-#define DEFAULT_BILLING_SHORT_RATE 0.05f
-#define DEFAULT_BILLING_BASE_FEE 0.5f
-#define DEFAULT_BILLING_LONG_RATE 0.01f
+#define DEFAULT_BILLING_THRESHOLD_SECONDS 10LL
+#define DEFAULT_BILLING_SHORT_RATE_1E4 500LL
+#define DEFAULT_BILLING_BASE_FEE_CENT 50LL
+#define DEFAULT_BILLING_LONG_RATE_1E4 100LL
 
 /* 全局卡链表头指针，服务生命周期内常驻内存。 */
 static CardNode* g_card_head = 0;
-/* 计费标准：阈值秒数、阈值内每秒单价、达到阈值基础费、超出后每秒单价。 */
-static float g_billing_threshold_seconds = DEFAULT_BILLING_THRESHOLD_SECONDS;
-static float g_billing_short_rate = DEFAULT_BILLING_SHORT_RATE;
-static float g_billing_base_fee = DEFAULT_BILLING_BASE_FEE;
-static float g_billing_long_rate = DEFAULT_BILLING_LONG_RATE;
+/* 计费标准：阈值秒数、阈值内每秒单价(万分元)、阈值基础费(分)、超出后每秒单价(万分元)。 */
+static int64_t g_billing_threshold_seconds = DEFAULT_BILLING_THRESHOLD_SECONDS;
+static int64_t g_billing_short_rate_1e4 = DEFAULT_BILLING_SHORT_RATE_1E4;
+static MoneyCent g_billing_base_fee_cent = DEFAULT_BILLING_BASE_FEE_CENT;
+static int64_t g_billing_long_rate_1e4 = DEFAULT_BILLING_LONG_RATE_1E4;
 
-static int billing_rule_is_valid(float threshold, float short_rate, float base_fee, float long_rate)
+static double rate_1e4_to_yuan(int64_t rate_1e4)
 {
-    return threshold > 0.0f && short_rate >= 0.0f && base_fee >= 0.0f && long_rate >= 0.0f;
+    return scaled_int64_to_double(rate_1e4, 4);
+}
+
+static int parse_threshold_token(const char* text, int64_t* out_seconds)
+{
+    if (strchr(text, '.') != 0)
+    {
+        int64_t scaled;
+
+        if (!parse_decimal_to_scaled_int64(text, 2, &scaled) || scaled < 0 || (scaled % 100) != 0)
+        {
+            return 0;
+        }
+
+        *out_seconds = scaled / 100;
+        return 1;
+    }
+
+    return parse_int64_strict(text, out_seconds) ? 1 : 0;
+}
+
+static int parse_rate_token(const char* text, int64_t* out_rate_1e4)
+{
+    if (strchr(text, '.') != 0)
+    {
+        return parse_decimal_to_scaled_int64(text, 4, out_rate_1e4) ? 1 : 0;
+    }
+
+    return parse_int64_strict(text, out_rate_1e4) ? 1 : 0;
+}
+
+static int parse_fee_token(const char* text, MoneyCent* out_fee_cent)
+{
+    if (strchr(text, '.') != 0)
+    {
+        return parse_yuan_to_cent_strict(text, out_fee_cent) ? 1 : 0;
+    }
+
+    return parse_int64_strict(text, out_fee_cent) ? 1 : 0;
+}
+
+static int billing_rule_is_valid(int64_t threshold_seconds,
+                                 int64_t short_rate_1e4,
+                                 MoneyCent base_fee_cent,
+                                 int64_t long_rate_1e4)
+{
+    return threshold_seconds > 0 && short_rate_1e4 >= 0 && base_fee_cent >= 0 && long_rate_1e4 >= 0;
+}
+
+static MoneyCent rate_cost_cent(int64_t seconds, int64_t rate_1e4)
+{
+    int64_t raw;
+
+    if (seconds <= 0 || rate_1e4 <= 0)
+    {
+        return 0;
+    }
+
+    if (seconds > LLONG_MAX / rate_1e4)
+    {
+        return LLONG_MAX;
+    }
+
+    raw = seconds * rate_1e4;
+    return (MoneyCent)((raw + 50) / 100);
+}
+
+static MoneyCent calculate_session_fee_cent(int64_t seconds_used)
+{
+    if (seconds_used < g_billing_threshold_seconds)
+    {
+        return rate_cost_cent(seconds_used, g_billing_short_rate_1e4);
+    }
+
+    return g_billing_base_fee_cent +
+           rate_cost_cent(seconds_used - g_billing_threshold_seconds, g_billing_long_rate_1e4);
 }
 
 static void save_billing_rule(void)
@@ -39,12 +115,12 @@ static void save_billing_rule(void)
         return;
     }
 
-    fprintf(file,
-            "%.2f##%.4f##%.2f##%.4f\n",
-            g_billing_threshold_seconds,
-            g_billing_short_rate,
-            g_billing_base_fee,
-            g_billing_long_rate);
+        fprintf(file,
+            "%lld##%lld##%lld##%lld\n",
+            (long long)g_billing_threshold_seconds,
+            (long long)g_billing_short_rate_1e4,
+            (long long)g_billing_base_fee_cent,
+            (long long)g_billing_long_rate_1e4);
     fclose(file);
 }
 
@@ -52,10 +128,14 @@ static void load_billing_rule(void)
 {
     FILE* file = fopen(BILLING_RULE_FILE_PATH, "r");
     char line[128];
-    float threshold;
-    float short_rate;
-    float base_fee;
-    float long_rate;
+    char threshold_text[32];
+    char short_rate_text[32];
+    char base_fee_text[32];
+    char long_rate_text[32];
+    int64_t threshold_seconds;
+    int64_t short_rate_1e4;
+    MoneyCent base_fee_cent;
+    int64_t long_rate_1e4;
 
     if (file == 0)
     {
@@ -70,13 +150,22 @@ static void load_billing_rule(void)
     }
 
     trim_newline(line);
-    if (sscanf(line, "%f##%f##%f##%f", &threshold, &short_rate, &base_fee, &long_rate) == 4 &&
-        billing_rule_is_valid(threshold, short_rate, base_fee, long_rate))
+    if (sscanf(line,
+               "%31[^#]##%31[^#]##%31[^#]##%31[^#]",
+               threshold_text,
+               short_rate_text,
+               base_fee_text,
+               long_rate_text) == 4 &&
+        parse_threshold_token(threshold_text, &threshold_seconds) &&
+        parse_rate_token(short_rate_text, &short_rate_1e4) &&
+        parse_fee_token(base_fee_text, &base_fee_cent) &&
+        parse_rate_token(long_rate_text, &long_rate_1e4) &&
+        billing_rule_is_valid(threshold_seconds, short_rate_1e4, base_fee_cent, long_rate_1e4))
     {
-        g_billing_threshold_seconds = threshold;
-        g_billing_short_rate = short_rate;
-        g_billing_base_fee = base_fee;
-        g_billing_long_rate = long_rate;
+        g_billing_threshold_seconds = threshold_seconds;
+        g_billing_short_rate_1e4 = short_rate_1e4;
+        g_billing_base_fee_cent = base_fee_cent;
+        g_billing_long_rate_1e4 = long_rate_1e4;
     }
 
     fclose(file);
@@ -120,6 +209,11 @@ static int card_match_keyword(const Card* card, const char* kw)
 static const char* status_to_text(int n_status);
 static int confirm_delete_card_two_steps(const char* card_name);
 
+static double yuan_display(MoneyCent cent)
+{
+    return cent_to_yuan_double(cent);
+}
+
 /* 打印查询结果的一行明细。 */
 static void print_card_detail_row(const Card* card)
 {
@@ -132,7 +226,7 @@ static void print_card_detail_row(const Card* card)
     printf("%s\t%s\t%.2f\t%s\t%.1f\t%d\t%s\n",
            card->aName,
            status_to_text(card->nStatus),
-           card->fBalance,
+            yuan_display(card->nBalanceCent),
            end_text,
            card->fTotalUse,
            card->nUseCount,
@@ -284,12 +378,6 @@ static int read_valid_password(const char* prompt, char* out, size_t out_size)
     }
 }
 
-/* 严格解析浮点输入，要求整行都是数字格式。 */
-static int try_parse_float(const char* text, float* out_value)
-{
-    return parse_float_strict(text, out_value) ? 1 : 0;
-}
-
 /* 严格解析整数输入，要求整行都是整数格式。 */
 static int try_parse_int(const char* text, int* out_value)
 {
@@ -298,12 +386,12 @@ static int try_parse_int(const char* text, int* out_value)
 
 /* 读取并校验金额，支持设置最小值及是否允许等于最小值。 */
 static int read_amount_with_rule(const char* prompt,
-                                 float* out_amount,
-                                 float min_value,
+                                 MoneyCent* out_amount_cent,
+                                 MoneyCent min_value_cent,
                                  int allow_equal_min)
 {
     char amount_text[INPUT_BUFFER_SIZE];
-    float amount;
+    MoneyCent amount_cent;
 
     while (1)
     {
@@ -318,7 +406,7 @@ static int read_amount_with_rule(const char* prompt,
             return 0;
         }
 
-        if (!try_parse_float(amount_text, &amount))
+        if (!parse_yuan_to_cent_strict(amount_text, &amount_cent))
         {
             printf("金额输入无效。\n");
             continue;
@@ -326,7 +414,7 @@ static int read_amount_with_rule(const char* prompt,
 
         if (allow_equal_min)
         {
-            if (amount < min_value)
+            if (amount_cent < min_value_cent)
             {
                 printf("金额输入无效。\n");
                 continue;
@@ -334,14 +422,14 @@ static int read_amount_with_rule(const char* prompt,
         }
         else
         {
-            if (amount <= min_value)
+            if (amount_cent <= min_value_cent)
             {
                 printf("金额输入无效。\n");
                 continue;
             }
         }
 
-        *out_amount = amount;
+        *out_amount_cent = amount_cent;
         return 1;
     }
 }
@@ -476,9 +564,9 @@ static const char* money_status_to_text(int n_status)
 /* 记录一条余额变动流水。 */
 static void record_money_change(const char* card_name,
                                 int status,
-                                float amount,
-                                float before_balance,
-                                float after_balance,
+                                MoneyCent amount_cent,
+                                MoneyCent before_balance_cent,
+                                MoneyCent after_balance_cent,
                                 time_t event_time)
 {
     Money record;
@@ -487,9 +575,9 @@ static void record_money_change(const char* card_name,
     strncpy(record.aCardName, card_name, sizeof(record.aCardName) - 1);
     record.tTime = event_time;
     record.nStatus = status;
-    record.fMoney = amount;
-    record.fBeforeBalance = before_balance;
-    record.fAfterBalance = after_balance;
+    record.nMoneyCent = amount_cent;
+    record.nBeforeBalanceCent = before_balance_cent;
+    record.nAfterBalanceCent = after_balance_cent;
     record.nDel = 0;
 
     if (!money_file_append(&record, MONEY_FILE_PATH))
@@ -633,9 +721,9 @@ static void query_consume_records_by_card_and_time(void)
                rec->aCardName,
                time_text,
                money_status_to_text(rec->nStatus),
-               rec->fMoney,
-               rec->fBeforeBalance,
-               rec->fAfterBalance);
+             yuan_display(rec->nMoneyCent),
+             yuan_display(rec->nBeforeBalanceCent),
+             yuan_display(rec->nAfterBalanceCent));
         ++match_count;
     }
 
@@ -661,7 +749,7 @@ static void query_total_revenue_by_time(void)
     size_t count = 0;
     size_t i;
     int consume_count = 0;
-    float total_revenue = 0.0f;
+    MoneyCent total_revenue_cent = 0;
 
     if (!read_time_range(&start_time, &end_time))
     {
@@ -692,14 +780,14 @@ static void query_total_revenue_by_time(void)
             continue;
         }
 
-        total_revenue += rec->fMoney;
+        total_revenue_cent += rec->nMoneyCent;
         ++consume_count;
     }
 
     printf("-------------总营业额统计结果-------------\n");
     printf("统计口径：仅统计消费金额\n");
     printf("消费笔数：%d\n", consume_count);
-    printf("总营业额：%.2f 元\n", total_revenue);
+    printf("总营业额：%.2f 元\n", yuan_display(total_revenue_cent));
 
     money_file_free_all(records);
     wait_enter();
@@ -712,8 +800,8 @@ static void query_monthly_revenue_by_year(void)
     Money* records = 0;
     size_t count = 0;
     size_t i;
-    float monthly[12] = {0.0f};
-    float yearly_total = 0.0f;
+    MoneyCent monthly[12] = {0};
+    MoneyCent yearly_total_cent = 0;
 
     if (!read_valid_year("请输入年份（如 2026）：", &year))
     {
@@ -760,7 +848,7 @@ static void query_monthly_revenue_by_year(void)
             continue;
         }
 
-        monthly[month_index] += rec->fMoney;
+        monthly[month_index] += rec->nMoneyCent;
     }
 
     printf("-------------月营业额统计结果-------------\n");
@@ -768,10 +856,10 @@ static void query_monthly_revenue_by_year(void)
     printf("月份\t营业额<元>\n");
     for (i = 0; i < 12; ++i)
     {
-        printf("%02d\t%.2f\n", (int)(i + 1), monthly[i]);
-        yearly_total += monthly[i];
+        printf("%02d\t%.2f\n", (int)(i + 1), yuan_display(monthly[i]));
+        yearly_total_cent += monthly[i];
     }
-    printf("全年\t%.2f\n", yearly_total);
+    printf("全年\t%.2f\n", yuan_display(yearly_total_cent));
 
     money_file_free_all(records);
     wait_enter();
@@ -818,7 +906,7 @@ void card_service_add_card(void)
     char restore_text[INPUT_BUFFER_SIZE];
     Card card;
     CardNode* existing_node;
-    float init_balance = 0.0f;
+    MoneyCent init_balance_cent = 0;
     char time_text[32];
 
     print_service_header("添加卡");
@@ -880,7 +968,7 @@ void card_service_add_card(void)
         return;
     }
 
-    if (!read_amount_with_rule("[添加卡] 请输入初始余额（元)：", &init_balance, 0.0f, 1))
+    if (!read_amount_with_rule("[添加卡] 请输入初始余额（元)：", &init_balance_cent, 0, 1))
     {
         return;
     }
@@ -895,7 +983,7 @@ void card_service_add_card(void)
     card.fTotalUse = 0.0f;
     card.tLast = 0;
     card.nUseCount = 0;
-    card.fBalance = init_balance;
+    card.nBalanceCent = init_balance_cent;
     card.nDel = 0;
 
     if (!append_card(&card))
@@ -908,16 +996,16 @@ void card_service_add_card(void)
     card_service_save();
     record_money_change(card.aName,
                         REGISTER_CARD,
-                        init_balance,
-                        0.0f,
-                        card.fBalance,
+                        init_balance_cent,
+                        0,
+                        card.nBalanceCent,
                         card.tStart);
 
     /* 输出添加结果摘要。 */
     time_to_string(card.tStart, time_text, sizeof(time_text));
     printf("-------------添加成功-------------\n");
     printf("卡号\t密码\t余额<元>\t开卡时间\n");
-    printf("%s\t%s\t%.2f \t%s\n", card.aName, card.aPwd, card.fBalance, time_text);
+    printf("%s\t%s\t%.2f \t%s\n", card.aName, card.aPwd, yuan_display(card.nBalanceCent), time_text);
     wait_enter();
 }
 
@@ -1054,7 +1142,7 @@ void card_service_start_session(void)
     printf("卡号\t余额<元>\t上机时间\n");
     printf("%s\t%.2f\t\t%s\n",
            node->data.aName,
-           node->data.fBalance,
+            yuan_display(node->data.nBalanceCent),
            start_time_text);
 
     wait_enter();
@@ -1066,9 +1154,10 @@ void card_service_end_session(void)
     char end_time_text[32];
     char start_time_text[32];
     time_t end_time;
-    double seconds_used;
-    float amount;
-    float old_balance;
+    int64_t seconds_used;
+    double seconds_used_display;
+    MoneyCent amount_cent;
+    MoneyCent old_balance_cent;
     CardNode* node;
 
     print_service_header("下机");
@@ -1094,35 +1183,27 @@ void card_service_end_session(void)
 
     node->data.nStatus = CARD_STATUS_OFFLINE;
     end_time = time(0);
-    seconds_used = difftime(end_time, node->data.tLast);
-    if (seconds_used < 0.0)
+    seconds_used = (int64_t)difftime(end_time, node->data.tLast);
+    if (seconds_used < 0)
     {
-        seconds_used = 0.0;
+        seconds_used = 0;
     }
+    seconds_used_display = (double)seconds_used;
 
-    /* 动态计费：阈值内按每秒单价；达到阈值后按基础费+超出秒数单价。 */
-    if (seconds_used < g_billing_threshold_seconds)
-    {
-        amount = (float)(seconds_used * g_billing_short_rate);
-    }
-    else
-    {
-        amount = (float)(g_billing_base_fee +
-                         (seconds_used - g_billing_threshold_seconds) * g_billing_long_rate);
-    }
+    amount_cent = calculate_session_fee_cent(seconds_used);
 
-    old_balance = node->data.fBalance;
-    node->data.fTotalUse += seconds_used;
-    node->data.fBalance -= amount;
+    old_balance_cent = node->data.nBalanceCent;
+    node->data.fTotalUse += seconds_used_display;
+    node->data.nBalanceCent -= amount_cent;
     node->data.nUseCount += 1;
 
     /* 计算本次使用时长和费用，更新累计使用和余额。 */
     card_service_save();
     record_money_change(node->data.aName,
                         CONSUME_CARD,
-                        amount,
-                        old_balance,
-                        node->data.fBalance,
+                        amount_cent,
+                        old_balance_cent,
+                        node->data.nBalanceCent,
                         end_time);
 
     time_to_string(node->data.tLast, start_time_text, sizeof(start_time_text));
@@ -1134,13 +1215,13 @@ void card_service_end_session(void)
            node->data.aName,
            start_time_text,
            end_time_text,
-           seconds_used,
-           amount,
-           node->data.fBalance);
+            seconds_used_display,
+           yuan_display(amount_cent),
+           yuan_display(node->data.nBalanceCent));
 
-    if (node->data.fBalance < 0.0f)
+    if (node->data.nBalanceCent < 0)
     {
-        printf("警告：余额不足，已欠费 %.2f 元，请尽快充值。\n", -node->data.fBalance);
+        printf("警告：余额不足，已欠费 %.2f 元，请尽快充值。\n", yuan_display(-node->data.nBalanceCent));
     }
     wait_enter();
 }
@@ -1150,10 +1231,10 @@ void card_service_recharge(void)
 {
     char card_name[INPUT_BUFFER_SIZE];
     char recharge_time_text[32];
-    float amount;
-    float bonus = 0.0f;
-    float credited_amount;
-    float old_balance;
+    MoneyCent amount_cent;
+    MoneyCent bonus_cent = 0;
+    MoneyCent credited_amount_cent;
+    MoneyCent old_balance_cent;
     CardNode* node;
 
     print_service_header("充值");
@@ -1175,43 +1256,43 @@ void card_service_recharge(void)
 
     printf("充值活动:满50送10，满100送25！！\n");
 
-    if (!read_amount_with_rule("[充值] 请输入充值金额（元)：", &amount, 0.0f, 0))
+    if (!read_amount_with_rule("[充值] 请输入充值金额（元)：", &amount_cent, 0, 0))
     {
         return;
     }
 
     /* 动态充值赠送：充值>=100送25；否则充值>=50送10。 */
-    if (amount >= 100.0f)
+    if (amount_cent >= 10000)
     {
-        bonus = 25.0f;
+        bonus_cent = 2500;
     }
-    else if (amount >= 50.0f)
+    else if (amount_cent >= 5000)
     {
-        bonus = 10.0f;
+        bonus_cent = 1000;
     }
 
-    credited_amount = amount + bonus;
+    credited_amount_cent = amount_cent + bonus_cent;
 
-    old_balance = node->data.fBalance;
-    node->data.fBalance += credited_amount;
+    old_balance_cent = node->data.nBalanceCent;
+    node->data.nBalanceCent += credited_amount_cent;
     node->data.tLast = time(0);
     card_service_save();
     record_money_change(node->data.aName,
                         CHARGE_CARD,
-                        credited_amount,
-                        old_balance,
-                        node->data.fBalance,
+                        credited_amount_cent,
+                        old_balance_cent,
+                        node->data.nBalanceCent,
                         node->data.tLast);
     time_to_string(node->data.tLast, recharge_time_text, sizeof(recharge_time_text));
     printf("-------------充值成功-------------\n");
     printf("卡号\t实充金额<元>\t赠送金额<元>\t到账金额<元>\t充值前余额<元>\t充值后余额<元>\t充值时间\n");
     printf("%s\t%.2f\t\t%.2f\t\t%.2f\t\t%.2f\t\t%.2f\t\t%s\n",
            node->data.aName,
-           amount,
-           bonus,
-           credited_amount,
-           old_balance,
-           node->data.fBalance,
+            yuan_display(amount_cent),
+            yuan_display(bonus_cent),
+            yuan_display(credited_amount_cent),
+            yuan_display(old_balance_cent),
+            yuan_display(node->data.nBalanceCent),
            recharge_time_text);
     wait_enter();
 }
@@ -1220,8 +1301,8 @@ void card_service_refund(void)
 {
     char card_name[INPUT_BUFFER_SIZE];
     char refund_time_text[32];
-    float amount;
-    float old_balance;
+    MoneyCent amount_cent;
+    MoneyCent old_balance_cent;
     CardNode* node;
     print_service_header("退费");
     if (!read_valid_card_name("[退费] 请输入卡号：", card_name, sizeof(card_name)))
@@ -1244,14 +1325,14 @@ void card_service_refund(void)
         return;
     }
 
-    printf("当前余额：%.2f 元\n", node->data.fBalance);
+    printf("当前余额：%.2f 元\n", yuan_display(node->data.nBalanceCent));
     while (1)
     {
-        if (!read_amount_with_rule("[退费] 请输入退费金额（元)：", &amount, 0.0f, 0))
+        if (!read_amount_with_rule("[退费] 请输入退费金额（元)：", &amount_cent, 0, 0))
         {
             return;
         }
-        if (amount > node->data.fBalance)
+        if (amount_cent > node->data.nBalanceCent)
         {
             printf("退费金额不能大于当前余额。\n");
             continue;
@@ -1259,24 +1340,24 @@ void card_service_refund(void)
         break;
     }
 
-    old_balance = node->data.fBalance;
-    node->data.fBalance -= amount;
+    old_balance_cent = node->data.nBalanceCent;
+    node->data.nBalanceCent -= amount_cent;
     node->data.tLast = time(0);
     card_service_save();
     record_money_change(node->data.aName,
                         REFUND_CARD,
-                        amount,
-                        old_balance,
-                        node->data.fBalance,
+                        amount_cent,
+                        old_balance_cent,
+                        node->data.nBalanceCent,
                         node->data.tLast);
     time_to_string(node->data.tLast, refund_time_text, sizeof(refund_time_text));
     printf("-------------退费成功-------------\n");
     printf("卡号\t退费金额<元>\t退费前余额<元>\t退费后余额<元>\t退费时间\n");
     printf("%s\t%.2f\t\t%.2f\t\t%.2f\t\t%s\n",
         node->data.aName,
-        amount,
-        old_balance,
-        node->data.fBalance,
+        yuan_display(amount_cent),
+        yuan_display(old_balance_cent),
+        yuan_display(node->data.nBalanceCent),
         refund_time_text);
     wait_enter();
 }
@@ -1339,13 +1420,15 @@ void card_service_admin_manage_pricing(void)
         char before_text[128];
         char after_text[128];
         int choice = -1;
-        float new_value;
+        int64_t new_threshold_seconds;
+        int64_t new_rate_1e4;
+        MoneyCent new_base_fee_cent;
 
         print_service_header("计费标准设置");
-        printf("当前阈值秒数：%.2f\n", g_billing_threshold_seconds);
-        printf("当前阈值内单价：%.4f 元/秒\n", g_billing_short_rate);
-        printf("当前阈值基础费：%.2f 元\n", g_billing_base_fee);
-        printf("当前超出后单价：%.4f 元/秒\n", g_billing_long_rate);
+        printf("当前阈值秒数：%lld\n", (long long)g_billing_threshold_seconds);
+        printf("当前阈值内单价：%.4f 元/秒\n", rate_1e4_to_yuan(g_billing_short_rate_1e4));
+        printf("当前阈值基础费：%.2f 元\n", yuan_display(g_billing_base_fee_cent));
+        printf("当前超出后单价：%.4f 元/秒\n", rate_1e4_to_yuan(g_billing_long_rate_1e4));
         printf("计费说明：时长 < 阈值 => 秒数 * 阈值内单价\n");
         printf("          时长 >= 阈值 => 阈值基础费 + 超出秒数 * 超出后单价\n");
         printf("1. 修改阈值秒数\n");
@@ -1373,11 +1456,11 @@ void card_service_admin_manage_pricing(void)
 
         snprintf(before_text,
                  sizeof(before_text),
-                 "T=%.2f,S=%.4f,B=%.2f,L=%.4f",
-                 g_billing_threshold_seconds,
-                 g_billing_short_rate,
-                 g_billing_base_fee,
-                 g_billing_long_rate);
+                 "T=%lld,S=%.4f,B=%.2f,L=%.4f",
+                 (long long)g_billing_threshold_seconds,
+                 rate_1e4_to_yuan(g_billing_short_rate_1e4),
+                 yuan_display(g_billing_base_fee_cent),
+                 rate_1e4_to_yuan(g_billing_long_rate_1e4));
 
         if (choice == 1)
         {
@@ -1391,22 +1474,22 @@ void card_service_admin_manage_pricing(void)
                 print_cancelled();
                 return;
             }
-            if (!try_parse_float(value_text, &new_value) || new_value <= 0.0f)
+            if (!parse_int64_strict(value_text, &new_threshold_seconds) || new_threshold_seconds <= 0)
             {
                 printf("阈值秒数输入无效。\n");
                 wait_enter();
                 continue;
             }
 
-            g_billing_threshold_seconds = new_value;
+            g_billing_threshold_seconds = new_threshold_seconds;
             save_billing_rule();
             snprintf(after_text,
                      sizeof(after_text),
-                     "T=%.2f,S=%.4f,B=%.2f,L=%.4f",
-                     g_billing_threshold_seconds,
-                     g_billing_short_rate,
-                     g_billing_base_fee,
-                     g_billing_long_rate);
+                     "T=%lld,S=%.4f,B=%.2f,L=%.4f",
+                     (long long)g_billing_threshold_seconds,
+                     rate_1e4_to_yuan(g_billing_short_rate_1e4),
+                     yuan_display(g_billing_base_fee_cent),
+                     rate_1e4_to_yuan(g_billing_long_rate_1e4));
             auth_append_audit("修改计费标准", "SYSTEM", before_text, after_text);
             printf("阈值秒数修改成功。\n");
             wait_enter();
@@ -1425,22 +1508,22 @@ void card_service_admin_manage_pricing(void)
                 print_cancelled();
                 return;
             }
-            if (!try_parse_float(value_text, &new_value) || new_value < 0.0f)
+            if (!parse_decimal_to_scaled_int64(value_text, 4, &new_rate_1e4) || new_rate_1e4 < 0)
             {
                 printf("阈值内单价输入无效。\n");
                 wait_enter();
                 continue;
             }
 
-            g_billing_short_rate = new_value;
+            g_billing_short_rate_1e4 = new_rate_1e4;
             save_billing_rule();
             snprintf(after_text,
                      sizeof(after_text),
-                     "T=%.2f,S=%.4f,B=%.2f,L=%.4f",
-                     g_billing_threshold_seconds,
-                     g_billing_short_rate,
-                     g_billing_base_fee,
-                     g_billing_long_rate);
+                     "T=%lld,S=%.4f,B=%.2f,L=%.4f",
+                     (long long)g_billing_threshold_seconds,
+                     rate_1e4_to_yuan(g_billing_short_rate_1e4),
+                     yuan_display(g_billing_base_fee_cent),
+                     rate_1e4_to_yuan(g_billing_long_rate_1e4));
             auth_append_audit("修改计费标准", "SYSTEM", before_text, after_text);
             printf("阈值内单价修改成功。\n");
             wait_enter();
@@ -1459,22 +1542,22 @@ void card_service_admin_manage_pricing(void)
                 print_cancelled();
                 return;
             }
-            if (!try_parse_float(value_text, &new_value) || new_value < 0.0f)
+            if (!parse_yuan_to_cent_strict(value_text, &new_base_fee_cent) || new_base_fee_cent < 0)
             {
                 printf("阈值基础费输入无效。\n");
                 wait_enter();
                 continue;
             }
 
-            g_billing_base_fee = new_value;
+            g_billing_base_fee_cent = new_base_fee_cent;
             save_billing_rule();
             snprintf(after_text,
                      sizeof(after_text),
-                     "T=%.2f,S=%.4f,B=%.2f,L=%.4f",
-                     g_billing_threshold_seconds,
-                     g_billing_short_rate,
-                     g_billing_base_fee,
-                     g_billing_long_rate);
+                     "T=%lld,S=%.4f,B=%.2f,L=%.4f",
+                     (long long)g_billing_threshold_seconds,
+                     rate_1e4_to_yuan(g_billing_short_rate_1e4),
+                     yuan_display(g_billing_base_fee_cent),
+                     rate_1e4_to_yuan(g_billing_long_rate_1e4));
             auth_append_audit("修改计费标准", "SYSTEM", before_text, after_text);
             printf("阈值基础费修改成功。\n");
             wait_enter();
@@ -1493,22 +1576,22 @@ void card_service_admin_manage_pricing(void)
                 print_cancelled();
                 return;
             }
-            if (!try_parse_float(value_text, &new_value) || new_value < 0.0f)
+            if (!parse_decimal_to_scaled_int64(value_text, 4, &new_rate_1e4) || new_rate_1e4 < 0)
             {
                 printf("超出后单价输入无效。\n");
                 wait_enter();
                 continue;
             }
 
-            g_billing_long_rate = new_value;
+            g_billing_long_rate_1e4 = new_rate_1e4;
             save_billing_rule();
             snprintf(after_text,
                      sizeof(after_text),
-                     "T=%.2f,S=%.4f,B=%.2f,L=%.4f",
-                     g_billing_threshold_seconds,
-                     g_billing_short_rate,
-                     g_billing_base_fee,
-                     g_billing_long_rate);
+                     "T=%lld,S=%.4f,B=%.2f,L=%.4f",
+                     (long long)g_billing_threshold_seconds,
+                     rate_1e4_to_yuan(g_billing_short_rate_1e4),
+                     yuan_display(g_billing_base_fee_cent),
+                     rate_1e4_to_yuan(g_billing_long_rate_1e4));
             auth_append_audit("修改计费标准", "SYSTEM", before_text, after_text);
             printf("超出后单价修改成功。\n");
             wait_enter();
@@ -1518,17 +1601,17 @@ void card_service_admin_manage_pricing(void)
         if (choice == 5)
         {
             g_billing_threshold_seconds = DEFAULT_BILLING_THRESHOLD_SECONDS;
-            g_billing_short_rate = DEFAULT_BILLING_SHORT_RATE;
-            g_billing_base_fee = DEFAULT_BILLING_BASE_FEE;
-            g_billing_long_rate = DEFAULT_BILLING_LONG_RATE;
+            g_billing_short_rate_1e4 = DEFAULT_BILLING_SHORT_RATE_1E4;
+            g_billing_base_fee_cent = DEFAULT_BILLING_BASE_FEE_CENT;
+            g_billing_long_rate_1e4 = DEFAULT_BILLING_LONG_RATE_1E4;
             save_billing_rule();
             snprintf(after_text,
                      sizeof(after_text),
-                     "T=%.2f,S=%.4f,B=%.2f,L=%.4f",
-                     g_billing_threshold_seconds,
-                     g_billing_short_rate,
-                     g_billing_base_fee,
-                     g_billing_long_rate);
+                     "T=%lld,S=%.4f,B=%.2f,L=%.4f",
+                     (long long)g_billing_threshold_seconds,
+                     rate_1e4_to_yuan(g_billing_short_rate_1e4),
+                     yuan_display(g_billing_base_fee_cent),
+                     rate_1e4_to_yuan(g_billing_long_rate_1e4));
             auth_append_audit("重置计费标准", "SYSTEM", before_text, after_text);
             printf("已恢复默认计费标准。\n");
             wait_enter();
@@ -1669,8 +1752,8 @@ void card_service_admin_edit_card(void)
         if (choice == 3)
         {
             char amount_text[INPUT_BUFFER_SIZE];
-            float new_balance;
-            float old_balance;
+            MoneyCent new_balance_cent;
+            MoneyCent old_balance_cent;
             char before_text[64];
             char after_text[64];
 
@@ -1684,23 +1767,23 @@ void card_service_admin_edit_card(void)
                 print_cancelled();
                 return;
             }
-            if (!try_parse_float(amount_text, &new_balance))
+            if (!parse_yuan_to_cent_strict(amount_text, &new_balance_cent))
             {
                 printf("余额输入无效。\n");
                 continue;
             }
 
-            old_balance = node->data.fBalance;
-            snprintf(before_text, sizeof(before_text), "%.2f", old_balance);
-            snprintf(after_text, sizeof(after_text), "%.2f", new_balance);
-            node->data.fBalance = new_balance;
+            old_balance_cent = node->data.nBalanceCent;
+            snprintf(before_text, sizeof(before_text), "%.2f", yuan_display(old_balance_cent));
+            snprintf(after_text, sizeof(after_text), "%.2f", yuan_display(new_balance_cent));
+            node->data.nBalanceCent = new_balance_cent;
             node->data.tLast = time(0);
             card_service_save();
             record_money_change(node->data.aName,
                                 ADJUST_CARD,
-                                new_balance - old_balance,
-                                old_balance,
-                                node->data.fBalance,
+                                new_balance_cent - old_balance_cent,
+                                old_balance_cent,
+                                node->data.nBalanceCent,
                                 node->data.tLast);
             auth_append_audit("修改余额", node->data.aName, before_text, after_text);
             printf("余额修改成功。\n");
@@ -1712,7 +1795,7 @@ void card_service_admin_edit_card(void)
             CardNode* prev = 0;
             char deleted_name[CARD_NAME_LEN + 1];
             char refund_time_text[32];
-            float refund_amount = 0.0f;
+            MoneyCent refund_amount_cent = 0;
             time_t delete_time;
 
             if (node->data.nStatus == CARD_STATUS_ONLINE)
@@ -1722,9 +1805,9 @@ void card_service_admin_edit_card(void)
                 continue;
             }
 
-            if (node->data.fBalance < 0.0f)
+            if (node->data.nBalanceCent < 0)
             {
-                printf("当前余额为 %.2f 元（欠费），欠费状态下不允许删除，请先充值补缴。\n", node->data.fBalance);
+                printf("当前余额为 %.2f 元（欠费），欠费状态下不允许删除，请先充值补缴。\n", yuan_display(node->data.nBalanceCent));
                 wait_enter();
                 continue;
             }
@@ -1738,17 +1821,17 @@ void card_service_admin_edit_card(void)
             deleted_name[sizeof(deleted_name) - 1] = '\0';
             delete_time = time(0);
 
-            if (node->data.fBalance > 0.0f)
+            if (node->data.nBalanceCent > 0)
             {
-                float old_balance = node->data.fBalance;
-                refund_amount = node->data.fBalance;
-                node->data.fBalance = 0.0f;
+                MoneyCent old_balance_cent = node->data.nBalanceCent;
+                refund_amount_cent = node->data.nBalanceCent;
+                node->data.nBalanceCent = 0;
                 node->data.tLast = delete_time;
                 record_money_change(node->data.aName,
                                     PHYSICAL_DELETE_CARD,
-                                    refund_amount,
-                                    old_balance,
-                                    node->data.fBalance,
+                                    refund_amount_cent,
+                                    old_balance_cent,
+                                    node->data.nBalanceCent,
                                     node->data.tLast);
             }
 
@@ -1772,12 +1855,12 @@ void card_service_admin_edit_card(void)
             free(node);
             card_service_save();
 
-            if (refund_amount > 0.0f)
+            if (refund_amount_cent > 0)
             {
                 time_to_string(delete_time, refund_time_text, sizeof(refund_time_text));
                 printf("-------------自动退费成功-------------\n");
                 printf("卡号\t退费金额<元>\t退费时间\n");
-                printf("%s\t%.2f\t\t%s\n", deleted_name, refund_amount, refund_time_text);
+                printf("%s\t%.2f\t\t%s\n", deleted_name, yuan_display(refund_amount_cent), refund_time_text);
             }
             else
             {
@@ -1831,7 +1914,7 @@ void card_service_delete_card(void)
     char after_status_text[64];
     char end_time_text[32];
     char refund_time_text[32];
-    float refund_amount = 0.0f;
+    MoneyCent refund_amount_cent = 0;
     time_t action_time;
 
     print_service_header("注销卡");
@@ -1853,9 +1936,9 @@ void card_service_delete_card(void)
         return;
     }
 
-    if (node->data.fBalance < 0.0f)
+    if (node->data.nBalanceCent < 0)
     {
-        printf("当前余额为 %.2f 元（欠费），欠费状态下不允许注销，请先充值补缴。\n", node->data.fBalance);
+        printf("当前余额为 %.2f 元（欠费），欠费状态下不允许注销，请先充值补缴。\n", yuan_display(node->data.nBalanceCent));
         wait_enter();
         return;
     }
@@ -1880,17 +1963,17 @@ void card_service_delete_card(void)
     action_time = time(0);
 
     /* 自动退所有费：注销时将正余额一次性退完并清零。 */
-    if (node->data.fBalance > 0.0f)
+    if (node->data.nBalanceCent > 0)
     {
-        float old_balance = node->data.fBalance;
-        refund_amount = node->data.fBalance;
-        node->data.fBalance = 0.0f;
+        MoneyCent old_balance_cent = node->data.nBalanceCent;
+        refund_amount_cent = node->data.nBalanceCent;
+        node->data.nBalanceCent = 0;
         node->data.tLast = action_time;
         record_money_change(node->data.aName,
                             DELETE_CARD,
-                            refund_amount,
-                            old_balance,
-                            node->data.fBalance,
+                            refund_amount_cent,
+                            old_balance_cent,
+                            node->data.nBalanceCent,
                             node->data.tLast);
     }
 
@@ -1902,12 +1985,12 @@ void card_service_delete_card(void)
     card_service_save();
     auth_append_audit("注销账号", node->data.aName, before_status_text, after_status_text);
 
-    if (refund_amount > 0.0f)
+    if (refund_amount_cent > 0)
     {
         time_to_string(action_time, refund_time_text, sizeof(refund_time_text));
         printf("-------------自动退费成功-------------\n");
         printf("卡号\t退费金额<元>\t退费时间\n");
-        printf("%s\t%.2f\t\t%s\n", card_name, refund_amount, refund_time_text);
+        printf("%s\t%.2f\t\t%s\n", card_name, yuan_display(refund_amount_cent), refund_time_text);
     }
     else
     {
@@ -1920,3 +2003,4 @@ void card_service_delete_card(void)
     printf("%s\t%s\t%s\n", card_name, status_to_text(node->data.nStatus), end_time_text);
     wait_enter();
 }
+

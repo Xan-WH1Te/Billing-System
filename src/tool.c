@@ -226,6 +226,147 @@ bool parse_int32_strict(const char* text, int* out_value)
     return true;
 }
 
+bool parse_int64_strict(const char* text, int64_t* out_value)
+{
+    const char* begin;
+    char* endptr;
+    long long parsed;
+
+    if (text == NULL || out_value == NULL)
+    {
+        return false;
+    }
+
+    begin = skip_leading_spaces(text);
+    if (*begin == '\0')
+    {
+        return false;
+    }
+
+    errno = 0;
+    parsed = strtoll(begin, &endptr, 10);
+    if (begin == endptr || errno == ERANGE)
+    {
+        return false;
+    }
+
+    endptr = (char*)skip_leading_spaces(endptr);
+    if (*endptr != '\0')
+    {
+        return false;
+    }
+
+    *out_value = (int64_t)parsed;
+    return true;
+}
+
+bool parse_decimal_to_scaled_int64(const char* text, int scale_digits, int64_t* out_value)
+{
+    const char* cursor;
+    int sign = 1;
+    int has_digit = 0;
+    int frac_digits = 0;
+    int64_t int_part = 0;
+    int64_t frac_part = 0;
+    int64_t scale_factor = 1;
+    int64_t scaled;
+
+    if (text == NULL || out_value == NULL || scale_digits < 0 || scale_digits > 9)
+    {
+        return false;
+    }
+
+    cursor = skip_leading_spaces(text);
+    if (*cursor == '+' || *cursor == '-')
+    {
+        if (*cursor == '-')
+        {
+            sign = -1;
+        }
+        ++cursor;
+    }
+
+    while (isdigit((unsigned char)*cursor))
+    {
+        int digit = *cursor - '0';
+
+        has_digit = 1;
+        if (int_part > (INT64_MAX - digit) / 10)
+        {
+            return false;
+        }
+        int_part = int_part * 10 + digit;
+        ++cursor;
+    }
+
+    if (*cursor == '.')
+    {
+        ++cursor;
+        while (isdigit((unsigned char)*cursor) && frac_digits < scale_digits)
+        {
+            frac_part = frac_part * 10 + (*cursor - '0');
+            ++frac_digits;
+            ++cursor;
+        }
+
+        if (isdigit((unsigned char)*cursor))
+        {
+            return false;
+        }
+    }
+
+    if (!has_digit)
+    {
+        return false;
+    }
+
+    while (frac_digits < scale_digits)
+    {
+        if (frac_part > INT64_MAX / 10)
+        {
+            return false;
+        }
+        frac_part *= 10;
+        ++frac_digits;
+    }
+
+    cursor = skip_leading_spaces(cursor);
+    if (*cursor != '\0')
+    {
+        return false;
+    }
+
+    while (scale_digits > 0)
+    {
+        if (scale_factor > INT64_MAX / 10)
+        {
+            return false;
+        }
+        scale_factor *= 10;
+        --scale_digits;
+    }
+
+    if (int_part > INT64_MAX / scale_factor)
+    {
+        return false;
+    }
+
+    scaled = int_part * scale_factor;
+    if (scaled > INT64_MAX - frac_part)
+    {
+        return false;
+    }
+    scaled += frac_part;
+
+    if (sign < 0)
+    {
+        scaled = -scaled;
+    }
+
+    *out_value = scaled;
+    return true;
+}
+
 bool parse_float_strict(const char* text, float* out_value)
 {
     const char* begin;
@@ -258,6 +399,34 @@ bool parse_float_strict(const char* text, float* out_value)
 
     *out_value = parsed;
     return true;
+}
+
+bool parse_yuan_to_cent_strict(const char* text, int64_t* out_cent)
+{
+    return parse_decimal_to_scaled_int64(text, 2, out_cent);
+}
+
+double cent_to_yuan_double(int64_t cent)
+{
+    return (double)cent / 100.0;
+}
+
+double scaled_int64_to_double(int64_t value, int scale_digits)
+{
+    int i;
+    double divisor = 1.0;
+
+    if (scale_digits < 0)
+    {
+        return (double)value;
+    }
+
+    for (i = 0; i < scale_digits; ++i)
+    {
+        divisor *= 10.0;
+    }
+
+    return (double)value / divisor;
 }
 
 bool is_cancel_command(const char* text)

@@ -2,12 +2,27 @@
 #include <tool.h>
 
 #include <ctype.h>
-#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #define MONEY_LINE_MAX_LEN 512
+
+static int parse_money_storage_token(const char* token, MoneyCent* out_cent)
+{
+	if (token == 0 || out_cent == 0)
+	{
+		return 0;
+	}
+
+	/* 兼容旧格式（元小数）与新格式（分整数）。 */
+	if (strchr(token, '.') != 0)
+	{
+		return parse_yuan_to_cent_strict(token, out_cent) ? 1 : 0;
+	}
+
+	return parse_int64_strict(token, out_cent) ? 1 : 0;
+}
 
 static void discard_until_newline(FILE* file)
 {
@@ -64,10 +79,6 @@ static int money_record_is_valid(const Money* record)
 	{
 		return 0;
 	}
-	if (!isfinite(record->fMoney) || !isfinite(record->fBeforeBalance) || !isfinite(record->fAfterBalance))
-	{
-		return 0;
-	}
 
 	return 1;
 }
@@ -93,13 +104,13 @@ bool money_file_append(const Money* record, const char* file_path)
 	}
 
 	write_result = fprintf(file,
-						"%s##%lld##%d##%.2f##%.2f##%.2f##%d\n",
+						"%s##%lld##%d##%lld##%lld##%lld##%d\n",
 						record->aCardName,
 						(long long)record->tTime,
 						record->nStatus,
-						record->fMoney,
-						record->fBeforeBalance,
-						record->fAfterBalance,
+						(long long)record->nMoneyCent,
+						(long long)record->nBeforeBalanceCent,
+						(long long)record->nAfterBalanceCent,
 						record->nDel);
 
 	if (write_result < 0)
@@ -142,6 +153,9 @@ bool money_file_load_all(const char* file_path, Money** out_records, size_t* out
 	{
 		Money record;
 		long long t_time;
+		char money_text[64];
+		char before_text[64];
+		char after_text[64];
 		size_t line_length;
 
 		line_length = strlen(line);
@@ -159,14 +173,21 @@ bool money_file_load_all(const char* file_path, Money** out_records, size_t* out
 
 		memset(&record, 0, sizeof(record));
 		if (sscanf(line,
-				   "%7[^#]##%lld##%d##%f##%f##%f##%d",
+				   "%7[^#]##%lld##%d##%63[^#]##%63[^#]##%63[^#]##%d",
 				   record.aCardName,
 				   &t_time,
 				   &record.nStatus,
-				   &record.fMoney,
-				   &record.fBeforeBalance,
-				   &record.fAfterBalance,
+				   money_text,
+				   before_text,
+				   after_text,
 				   &record.nDel) != 7)
+		{
+			continue;
+		}
+
+		if (!parse_money_storage_token(money_text, &record.nMoneyCent) ||
+			!parse_money_storage_token(before_text, &record.nBeforeBalanceCent) ||
+			!parse_money_storage_token(after_text, &record.nAfterBalanceCent))
 		{
 			continue;
 		}
@@ -224,3 +245,4 @@ void money_file_free_all(Money* records)
 {
 	free(records);
 }
+

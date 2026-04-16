@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <time.h>
 
 #include <stddef.h>
@@ -30,9 +31,38 @@ bool read_line_safely(const char* prompt, char* out, size_t out_size);
 bool parse_int32_strict(const char* text, int* out_value);
 
 /**
+ * @brief 严格解析十进制 64 位整数（允许首尾空白，不允许尾随垃圾字符）。
+ */
+bool parse_int64_strict(const char* text, int64_t* out_value);
+
+/**
+ * @brief 严格解析十进制小数并按 scale_digits 放大为整数。
+ *
+ * 示例：text="0.0500", scale_digits=4 => 500
+ */
+bool parse_decimal_to_scaled_int64(const char* text, int scale_digits, int64_t* out_value);
+
+/**
  * @brief 严格解析浮点数（允许首尾空白，不允许尾随垃圾字符）。
  */
 bool parse_float_strict(const char* text, float* out_value);
+
+/**
+ * @brief 严格解析“元”金额文本并转换为“分”。
+ *
+ * 支持格式：123、123.4、123.45、-5.00。
+ */
+bool parse_yuan_to_cent_strict(const char* text, int64_t* out_cent);
+
+/**
+ * @brief 将“分”转换为“元”的展示值。
+ */
+double cent_to_yuan_double(int64_t cent);
+
+/**
+ * @brief 将按 10^scale_digits 缩放的整数转换为展示浮点值。
+ */
+double scaled_int64_to_double(int64_t value, int scale_digits);
 
 /**
  * @brief 判断输入是否为取消命令 q/Q（忽略空白）。

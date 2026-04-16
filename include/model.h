@@ -1,7 +1,10 @@
 #pragma once
 
 #include <global.h>
+#include <stdint.h>
 #include <time.h>
+
+typedef int64_t MoneyCent;
 
 typedef struct Card
 {
@@ -13,7 +16,7 @@ typedef struct Card
     float fTotalUse;
     time_t tLast;
     int nUseCount;
-    float fBalance;
+    MoneyCent nBalanceCent;
     int nDel;
 } Card;
 
@@ -21,7 +24,7 @@ typedef struct LogonInfo
 {
     char aCardName[CARD_NAME_LEN + 1];
     time_t tLogon;
-    float fBalance;
+    MoneyCent nBalanceCent;
 } LogonInfo;
 
 typedef struct SettleInfo
@@ -29,8 +32,8 @@ typedef struct SettleInfo
     char aCardName[CARD_NAME_LEN + 1];
     time_t tStart;
     time_t tEnd;
-    float fAmount;
-    float fBalance;
+    MoneyCent nAmountCent;
+    MoneyCent nBalanceCent;
 } SettleInfo;
 
 typedef struct Money
@@ -38,9 +41,9 @@ typedef struct Money
     char aCardName[CARD_NAME_LEN + 1];
     time_t tTime;
     int nStatus;
-    float fMoney;
-    float fBeforeBalance;
-    float fAfterBalance;
+    MoneyCent nMoneyCent;
+    MoneyCent nBeforeBalanceCent;
+    MoneyCent nAfterBalanceCent;
     int nDel;
 } Money;
 
