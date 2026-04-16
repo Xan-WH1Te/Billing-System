@@ -39,6 +39,8 @@ typedef struct Money
     time_t tTime;
     int nStatus;
     float fMoney;
+    float fBeforeBalance;
+    float fAfterBalance;
     int nDel;
 } Money;
 

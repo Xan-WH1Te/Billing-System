@@ -1,11 +1,94 @@
 #include <card_file.h>
 #include <tool.h>
 
+#include <ctype.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #define CARD_LINE_MAX_LEN 512
+
+static void free_all_nodes(CardNode* head)
+{
+    while (head != 0)
+    {
+        CardNode* next = head->next;
+        free(head);
+        head = next;
+    }
+}
+
+static void discard_until_newline(FILE* file)
+{
+    int ch;
+
+    while ((ch = fgetc(file)) != '\n' && ch != EOF)
+    {
+    }
+}
+
+static int is_all_digits(const char* text)
+{
+    size_t i;
+    size_t length;
+
+    if (text == 0)
+    {
+        return 0;
+    }
+
+    length = strlen(text);
+    if (length == 0)
+    {
+        return 0;
+    }
+
+    for (i = 0; i < length; ++i)
+    {
+        if (!isdigit((unsigned char)text[i]))
+        {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+static int card_record_is_valid(const Card* card)
+{
+    if (card == 0)
+    {
+        return 0;
+    }
+
+    if (strlen(card->aName) != CARD_NAME_LEN || !is_all_digits(card->aName))
+    {
+        return 0;
+    }
+    if (strlen(card->aPwd) != CARD_PWD_LEN || !is_all_digits(card->aPwd))
+    {
+        return 0;
+    }
+    if (card->nStatus < CARD_STATUS_OFFLINE || card->nStatus > CARD_STATUS_DELETED)
+    {
+        return 0;
+    }
+    if (card->nDel != 0 && card->nDel != 1)
+    {
+        return 0;
+    }
+    if (card->nUseCount < 0)
+    {
+        return 0;
+    }
+    if (!isfinite(card->fTotalUse) || !isfinite(card->fBalance))
+    {
+        return 0;
+    }
+
+    return 1;
+}
 
 /* 将一张卡追加到链表尾部，成功返回1，失败返回0。 */
 static int append_node(CardNode** head, CardNode** tail, const Card* card)
@@ -39,6 +122,7 @@ bool card_file_save_all(const CardNode* head, const char* file_path)
 {
     FILE* file;
     const CardNode* current;
+    int write_result;
 
     if (file_path == 0)
     {
@@ -56,22 +140,31 @@ bool card_file_save_all(const CardNode* head, const char* file_path)
     {
         /* 以 "字段##字段" 的行格式写出，便于后续按行反序列化。 */
         /* 顺序固定：卡号, 密码, 状态, 开卡, 截止, 累计使用, 上次使用, 使用次数, 余额, 删除标记。 */
-        fprintf(file,
-                "%s##%s##%d##%lld##%lld##%.2f##%lld##%d##%.2f##%d\n",
-                current->data.aName,
-                current->data.aPwd,
-                current->data.nStatus,
-                (long long)current->data.tStart,
-                (long long)current->data.tEnd,
-                current->data.fTotalUse,
-                (long long)current->data.tLast,
-                current->data.nUseCount,
-                current->data.fBalance,
-                current->data.nDel);
+        write_result = fprintf(file,
+                               "%s##%s##%d##%lld##%lld##%.2f##%lld##%d##%.2f##%d\n",
+                               current->data.aName,
+                               current->data.aPwd,
+                               current->data.nStatus,
+                               (long long)current->data.tStart,
+                               (long long)current->data.tEnd,
+                               current->data.fTotalUse,
+                               (long long)current->data.tLast,
+                               current->data.nUseCount,
+                               current->data.fBalance,
+                               current->data.nDel);
+        if (write_result < 0)
+        {
+            fclose(file);
+            return false;
+        }
         current = current->next;
     }
 
-    fclose(file);
+    if (fclose(file) != 0)
+    {
+        return false;
+    }
+
     return true;
 }
 
@@ -100,6 +193,15 @@ CardNode* card_file_load_all(const char* file_path)
         long long t_start;
         long long t_end;
         long long t_last;
+        size_t line_length;
+
+        line_length = strlen(line);
+        if (line_length > 0 && line[line_length - 1] != '\n')
+        {
+            /* 单条记录超长时丢弃余下内容，避免污染下一行。 */
+            discard_until_newline(file);
+            continue;
+        }
 
         /* 空行直接跳过，避免无意义解析。 */
         trim_newline(line);
@@ -130,10 +232,17 @@ CardNode* card_file_load_all(const char* file_path)
         card.tEnd = (time_t)t_end;
         card.tLast = (time_t)t_last;
 
-        /* 追加失败通常是内存不足，保留已加载数据并结束读取。 */
+        if (!card_record_is_valid(&card))
+        {
+            continue;
+        }
+
+        /* 追加失败通常是内存不足，释放已加载数据并失败返回。 */
         if (!append_node(&head, &tail, &card))
         {
-            break;
+            free_all_nodes(head);
+            fclose(file);
+            return 0;
         }
     }
 

@@ -10,6 +10,8 @@ add_executable(billing
     src/service.c
     src/card_service.c
     src/card_file.c
+    src/money_file.c
+    src/auth_service.c
     src/tool.c
 )
 
